@@ -189,6 +189,18 @@ def LinalgMemoryFootprintReduction : FunctionPass<"linalg-memory-footprint-reduc
   ];
 }
 
+def LinalgOpExtraction : FunctionPass<"linalg-op-extract"> {
+   let summary = "Extracts the linalg ops within a function into their own "
+                                           "functions";
+   let constructor = "mlir::createLinalgOpExtractionPass()";
+   let dependentDialects = [
+     "AffineDialect",
+     "linalg::LinalgDialect",
+     "memref::MemRefDialect",
+     "scf::SCFDialect"
+   ];
+}
+
 def LinalgTilingToParallelLoops
     : FunctionPass<"linalg-tile-to-parallel-loops"> {
   let summary = "Tile operations in the linalg dialect to parallel loops";

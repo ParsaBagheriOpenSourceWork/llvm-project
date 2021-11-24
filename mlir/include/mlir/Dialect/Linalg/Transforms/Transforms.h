@@ -940,8 +940,8 @@ protected:
 /// scattering magic constants throughout the code base, the patterns must be
 /// added with this function. `baseBenefit` can be used to offset the benefit
 /// of all PadTensorOp vectorization patterns by a certain value.
-void populatePadTensorOpVectorizationPatterns(
-    RewritePatternSet &patterns, PatternBenefit baseBenefit = 1);
+void populatePadTensorOpVectorizationPatterns(RewritePatternSet &patterns,
+                                              PatternBenefit baseBenefit = 1);
 
 /// Match and rewrite for the pattern:
 /// ```
@@ -1099,6 +1099,17 @@ struct ExtractSliceOfPadTensorSwapPattern
 
   LogicalResult matchAndRewrite(tensor::ExtractSliceOp sliceOp,
                                 PatternRewriter &rewriter) const override;
+};
+
+template <typename OpTy>
+class ExtractOpRewritePattern : public OpRewritePattern<OpTy> {
+
+public:
+  explicit ExtractOpRewritePattern(MLIRContext *cntx)
+      : OpRewritePattern<OpTy>(cntx) {}
+
+  LogicalResult matchAndRewrite(OpTy op,
+                                mlir::PatternRewriter &rewriter) const override;
 };
 
 } // namespace linalg

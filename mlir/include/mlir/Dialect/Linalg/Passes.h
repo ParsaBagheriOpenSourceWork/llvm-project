@@ -46,6 +46,8 @@ std::unique_ptr<OperationPass<FuncOp>> createLinalgMemoryFootprintReductionPass(
     int64_t maxFootprint = 0,
     linalg::MemReduceFn fn = linalg::reduceLinalgOpFootprintGreedily);
 
+std::unique_ptr<OperationPass<FuncOp>> createLinalgOpExtractionPass();
+
 std::unique_ptr<OperationPass<FuncOp>>
 createLinalgPromotionPass(bool dynamicBuffers, bool useAlloca);
 
