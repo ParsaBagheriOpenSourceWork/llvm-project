@@ -23,6 +23,8 @@ class Pass;
 /// luminous.dispatch operation.
 std::unique_ptr<Pass> createParallelLoopToGpuPass();
 
+std::unique_ptr<Pass> createParallelToLuminousDispatchPass();
+
 } // namespace mlir
 
 #endif // MLIR_CONVERSION_SCFTOLUMINOUS_SCFTOLUMINOUSPASS_H

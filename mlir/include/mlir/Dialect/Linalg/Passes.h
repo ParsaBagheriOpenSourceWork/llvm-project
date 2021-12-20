@@ -40,6 +40,7 @@ using MemReduceFn =
     std::function<void(Operation *op, LinalgOpShape &, int64_t)>;
 void reduceLinalgOpFootprintGreedily(Operation *op, LinalgOpShape &,
                                      size_t maxSize);
+constexpr StringLiteral memoryFootprintAttr = "MaxMemoryFootprint";
 } // namespace linalg
 
 std::unique_ptr<OperationPass<FuncOp>> createLinalgMemoryFootprintReductionPass(

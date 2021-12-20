@@ -29,9 +29,9 @@ class LinalgOpShape {
   const SmallVector<AffineMap, 4> indexingMaps;
   const SmallVector<int64_t, 4> bitWidths;
 
-  LinalgOpShape(SmallVector<int64_t, 4> s, ArrayRef<AffineMap> iMaps,
+  LinalgOpShape(SmallVector<int64_t, 4> s, SmallVector<AffineMap, 4> iMaps,
                 SmallVector<int64_t, 4> bWidths)
-      : opShape(std::move(s)), indexingMaps(iMaps.begin(), iMaps.end()),
+      : opShape(std::move(s)), indexingMaps(std::move(iMaps)),
         bitWidths(std::move(bWidths)) {};
 
 public:

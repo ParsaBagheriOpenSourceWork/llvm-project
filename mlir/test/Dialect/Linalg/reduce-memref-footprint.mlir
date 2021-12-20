@@ -1,5 +1,3 @@
-// RUN: mlir-opt %s --linalg-memory-footprint-reduce="linalg-max-memory-footprint=5000000" | FileCheck %s -check-prefix=REDUCE-5mb
-// RUN: mlir-opt %s --linalg-memory-footprint-reduce="linalg-max-memory-footprint=1000000" | FileCheck %s -check-prefix=REDUCE-1mb
 // RUN: mlir-opt %s --linalg-memory-footprint-reduce="linalg-max-memory-footprint=10000" | FileCheck %s -check-prefix=REDUCE-10kb
 
 #map0 = affine_map<(d0, d1, d2) -> (d0, d1, d2)>

@@ -53,7 +53,8 @@ LinalgOpShape LinalgOpShape::create(LinalgOp op) {
   auto indexingMaps = op.getIndexingMaps();
   auto bitWidths = getBitWidths(op);
   assert(bitWidths.size() == indexingMaps.size());
-  return LinalgOpShape(opShape, indexingMaps, std::move(bitWidths));
+  return LinalgOpShape(std::move(opShape), std::move(indexingMaps),
+                       std::move(bitWidths));
 }
 
 size_t LinalgOpShape::computeSize() const {
@@ -75,8 +76,8 @@ void reduceLinalgOpFootprintGreedily(Operation *op,
     return;
 
   auto &shape = linalgOpShape.get();
+  auto curSize = linalgOpShape.computeSize();
   for (size_t i = 0, end = shape.size(); i < end; i++) {
-    auto curSize = linalgOpShape.computeSize();
     if (curSize <= maxSize)
       return;
     int64_t reductionFactor = (curSize + maxSize - 1) / maxSize;
