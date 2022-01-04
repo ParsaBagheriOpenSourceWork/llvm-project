@@ -7,4 +7,9 @@ module attributes {luminous.container_module} {
       luminous.return
     }
   }
+
+  func @f(%arg0: memref<1024xf32>, %arg1: memref<2048xf32>) {
+    %t0 = luminous.dispatch @kernels::@kernel(%arg0: memref<1024xf32>, %arg1: memref<2048xf32>)
+    return
+  }
 }

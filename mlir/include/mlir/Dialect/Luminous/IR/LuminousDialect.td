@@ -23,12 +23,17 @@ def Luminous_Dialect : Dialect {
   let name = "luminous";
   let cppNamespace = "::mlir::luminous";
   let dependentDialects = ["async::AsyncDialect"];
+  let hasOperationAttrVerify = 1;
 
   let extraClassDeclaration = [{
     /// Get the name of the attribute used to annotate the modules that contain
     /// luminous modules.
     static StringRef getContainerModuleAttrName() {
       return "luminous.container_module";
+    }
+
+    static StringRef getFuncAttrName() {
+      return "luminous.function";
     }
   }];
 }

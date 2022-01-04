@@ -151,4 +151,75 @@ def Luminous_ReturnOp : Luminous_Op<"return", [HasParent<"LuminousFuncOp">,
   let assemblyFormat = "attr-dict";
 }
 
+//===----------------------------------------------------------------------===//
+// Luminous DispatchOp
+//===----------------------------------------------------------------------===//
+
+def Luminous_DispatchOp : Luminous_Op<"dispatch", [AttrSizedOperandSegments]>,
+                          Arguments<(ins Variadic<Async_TokenType>:$asyncDependencies,
+                                       SymbolRefAttr:$function,
+                                       Variadic<AnyType>:$operands)>,
+                          Results<(outs Async_TokenType:$asyncToken)> {
+  let summary = "Launches a Luminous async function";
+
+  let description = [{
+    Example:
+
+    ```mlir
+      module attributes{luminous.container_module} {
+
+        // This module creates a separate compilation unit.
+        luminous.module @kernels{
+          luminous.func @kernel(%arg0: memref<128xf32>){
+            ...
+            luminous.return
+          }
+        }
+
+        func @function(%arg0: memref<128xf32>) {
+          %t0 = ... : !async.token
+          %t1 = luminous.dispatch [%t0] @kernels::@kernel(%arg0)
+          ...
+          return
+        }
+      }
+    ```
+  }];
+
+  let skipDefaultBuilders = 1;
+
+  let builders = [OpBuilder<(ins "LuminousFuncOp": $luminousFunc,
+                               "ValueRange": $asyncDependencies,
+                               "ValueRange": $funcOperands)>];
+
+  let extraClassDeclaration = [{
+    /// The number of operands passed to the kernel function.
+    unsigned getNumFuncOperands();
+
+    /// The name of the Luminous function's containing module.
+    StringAttr getFuncModuleName();
+
+    /// The name of the function.
+    StringAttr getFuncName();
+
+    /// The i-th operand passed to the function.
+    Value getFuncOperand(unsigned i);
+
+    /// The name of the symbol reference attribute specifying the kernel to launch.
+    static StringRef getFuncAttrName() { return "function"; }
+
+    // This needs to quietly verify if attributes with names defined below are
+    // present since it is run before the verifier of this op.
+    friend LogicalResult LuminousDialect::verifyOperationAttribute(Operation *op,
+                                                                   NamedAttribute attr);
+  }];
+
+  let verifier = [{ return ::verify(*this); }];
+  let assemblyFormat = [{
+    custom<AsyncDependencies>(type($asyncToken), $asyncDependencies)
+    $function
+    custom<DispatchOpOperands>($operands, type($operands))
+    attr-dict}];
+}
+
 #endif // LUMINOUS_OPS
