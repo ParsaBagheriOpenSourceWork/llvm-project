@@ -48,9 +48,23 @@ struct MemReductionLinalgTilingPattern : public LinalgBaseTilingPattern {
                                                             tiledLinalgOp)))
       return failure();
 
-    for (auto *loop : tiledLinalgOp.loops)
+    rewriter.
+    for (auto *loop : tiledLinalgOp.loops) {
+      llvm::errs() << "before\n";
+      loop->dump();
+      loop->template walk([&](scf::ParallelOp parallelOp) {
+        for (auto dim :
+             llvm::zip(parallelOp.lowerBound(), parallelOp.upperBound())) {
+          if (std::get<0>(dim) == std::get<1>(dim)) {
+            rewriter.replaceOp(parallelOp, parallelOp.initVals());
+          }
+        }
+      });
+      llvm::errs() << "after\n";
+      loop->dump();
       loop->setAttr(reductionAttrName,
                     rewriter.getI64IntegerAttr(maxMemFootprint));
+    }
 
     if (tiledLinalgOp.tensorResults.empty())
       rewriter.eraseOp(op);

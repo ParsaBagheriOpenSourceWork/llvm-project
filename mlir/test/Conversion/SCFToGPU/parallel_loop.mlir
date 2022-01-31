@@ -7,8 +7,10 @@ func @parallel_loop_bidy_bidx(%arg0 : index, %arg1 : index, %arg2 : index,
                               %buf : memref<?x?xf32>,
                               %res : memref<?x?xf32>) {
   %step = constant 2 : index
-  scf.parallel (%i0, %i1) = (%arg0, %arg1) to (%arg2, %arg3)
-                                          step (%arg4, %step)  {
+  %c0 = constant 0 : index
+  %c1 = constant 1 : index
+  scf.parallel (%i0, %i1, %i2) = (%arg0, %arg1, %c0) to (%arg2, %arg3, %c1)
+                                          step (%arg4, %step, %c1)  {
     %val = memref.load %buf[%i0, %i1] : memref<?x?xf32>
     memref.store %val, %res[%i1, %i0] : memref<?x?xf32>
   } { mapping = [{processor = 1, map = affine_map<(d0) -> (d0)>, bound = affine_map<(d0) -> (d0)>}, {processor = 0, map = affine_map<(d0) -> (d0)>, bound = affine_map<(d0) -> (d0)>}] }
