@@ -23,8 +23,85 @@
 
 using namespace mlir;
 using namespace mlir::linalg;
+using namespace mlir::scf;
 
-constexpr const char *reductionAttrName = "max-memory-footprint";
+constexpr const char *maxMemoryAttrName = "linalg-max-memory-footprint";
+constexpr const char *dispatchAttrName = "linalg-luminous-dispatch";
+
+namespace {
+
+// This class is a copied and modified version of
+// CollapseSingleIterationLoops rewrite pattern in mlir/lib/Dialect/SCF/SCF.cpp
+struct AttrPropagatingSingleIterationLoopCanonicalizer
+    : public OpRewritePattern<ParallelOp> {
+  // Collapse loop dimensions that perform a single iteration.
+  using OpRewritePattern<ParallelOp>::OpRewritePattern;
+  LogicalResult matchAndRewrite(ParallelOp op,
+                                PatternRewriter &rewriter) const override {
+
+    if (! op->hasAttr(maxMemoryAttrName))
+      return success();
+
+    BlockAndValueMapping mapping;
+    // Compute new loop bounds that omit all single-iteration loop dimensions.
+    SmallVector<Value, 2> newLowerBounds;
+    SmallVector<Value, 2> newUpperBounds;
+    SmallVector<Value, 2> newSteps;
+    newLowerBounds.reserve(op.lowerBound().size());
+    newUpperBounds.reserve(op.upperBound().size());
+    newSteps.reserve(op.step().size());
+    for (auto dim : llvm::zip(op.lowerBound(), op.upperBound(), op.step(),
+                              op.getInductionVars())) {
+      Value lowerBound, upperBound, step, iv;
+      std::tie(lowerBound, upperBound, step, iv) = dim;
+      // Collect the statically known loop bounds.
+      auto lowerBoundConstant =
+          dyn_cast_or_null<ConstantIndexOp>(lowerBound.getDefiningOp());
+      auto upperBoundConstant =
+          dyn_cast_or_null<ConstantIndexOp>(upperBound.getDefiningOp());
+      auto stepConstant =
+          dyn_cast_or_null<ConstantIndexOp>(step.getDefiningOp());
+      // Replace the loop induction variable by the lower bound if the loop
+      // performs a single iteration. Otherwise, copy the loop bounds.
+      if (lowerBoundConstant && upperBoundConstant && stepConstant &&
+          (upperBoundConstant.getValue() - lowerBoundConstant.getValue()) > 0 &&
+          (upperBoundConstant.getValue() - lowerBoundConstant.getValue()) <=
+              stepConstant.getValue()) {
+        mapping.map(iv, lowerBound);
+      } else {
+        newLowerBounds.push_back(lowerBound);
+        newUpperBounds.push_back(upperBound);
+        newSteps.push_back(step);
+      }
+    }
+    // Exit if none of the loop dimensions perform a single iteration.
+    if (newLowerBounds.size() == op.lowerBound().size())
+      return failure();
+
+    if (newLowerBounds.empty()) {
+      // All of the loop dimensions perform a single iteration. Inline
+      // loop body and nested ReduceOp's
+      SmallVector<Value> results;
+      results.reserve(op.initVals().size());
+      for (auto &bodyOp : op.getLoopBody().front().without_terminator())
+        rewriter.clone(bodyOp, mapping);
+
+      rewriter.replaceOp(op, results);
+      return success();
+    }
+    // Replace the parallel loop by lower-dimensional parallel loop.
+    auto newOp = rewriter.create<ParallelOp>(op.getLoc(), newLowerBounds,
+                                                  newUpperBounds, newSteps,
+                                                  op.initVals(), nullptr);
+    newOp->setAttr(maxMemoryAttrName, op->getAttr(maxMemoryAttrName));
+    // Clone the loop body and remap the block arguments of the collapsed loops
+    // (inlining does not support a cancellable block argument mapping).
+    rewriter.cloneRegionBefore(op.region(), newOp.region(),
+                               newOp.region().begin(), mapping);
+    rewriter.replaceOp(op, newOp.getResults());
+    return success();
+  }
+};
 
 /// Uses linang tiling rewrite pattern to tile the linalg op,
 /// then adds an attribute specifying it's maximum memory footprint to the
@@ -48,24 +125,13 @@ struct MemReductionLinalgTilingPattern : public LinalgBaseTilingPattern {
                                                             tiledLinalgOp)))
       return failure();
 
-    rewriter.
+    TiledLoopOp result;
     for (auto *loop : tiledLinalgOp.loops) {
-      llvm::errs() << "before\n";
-      loop->dump();
-      loop->template walk([&](scf::ParallelOp parallelOp) {
-        for (auto dim :
-             llvm::zip(parallelOp.lowerBound(), parallelOp.upperBound())) {
-          if (std::get<0>(dim) == std::get<1>(dim)) {
-            rewriter.replaceOp(parallelOp, parallelOp.initVals());
-          }
-        }
-      });
-      llvm::errs() << "after\n";
-      loop->dump();
-      loop->setAttr(reductionAttrName,
+      loop->setAttr(maxMemoryAttrName,
                     rewriter.getI64IntegerAttr(maxMemFootprint));
     }
 
+    tiledLinalgOp.op->setAttr(dispatchAttrName, rewriter.getUnitAttr());
     if (tiledLinalgOp.tensorResults.empty())
       rewriter.eraseOp(op);
     else
@@ -125,6 +191,7 @@ applyTilingToLoopPatterns(int64_t maxMemoryFootprint, FuncOp funcOp,
   MLIRContext *ctx = funcOp.getContext();
   RewritePatternSet patterns(ctx);
   insertTilingPatterns(maxMemoryFootprint, patterns, options);
+  patterns.add<AttrPropagatingSingleIterationLoopCanonicalizer>(ctx);
   scf::populateSCFForLoopCanonicalizationPatterns(patterns);
   (void)applyPatternsAndFoldGreedily(funcOp, std::move(patterns));
   (void)applyPatternsAndFoldGreedily(
@@ -135,7 +202,6 @@ applyTilingToLoopPatterns(int64_t maxMemoryFootprint, FuncOp funcOp,
   });
 }
 
-namespace {
 struct LinalgMemoryFootprintReductionPass
     : public LinalgMemoryFootprintReductionBase<
           LinalgMemoryFootprintReductionPass> {
