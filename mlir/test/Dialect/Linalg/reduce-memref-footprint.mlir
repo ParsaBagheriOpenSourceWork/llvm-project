@@ -14,16 +14,17 @@ func @function(%arg0: memref<64x128x1024xf32>, %arg1: memref<64x128x1024xf32>, %
 
 // REDUCE-5mb-LABEL: func @function(
 // REDUCE-5mb-SAME:    [[LHS:%.*]]: {{.*}}, [[RHS:%.*]]: {{.*}}, [[SUM:%.*]]: {{.*}}) {
-// REDUCE-5mb-DAG: [[C0:%.*]] = constant 0 : index
-// REDUCE-5mb-DAG: [[C64:%.*]] = constant 64 : index
-// REDUCE-5mb-DAG: [[C2:%.*]] = constant 2 : index
-// REDUCE-5mb: scf.parallel ([[I:%.*]]) = ([[C0]]) to ([[C64]]) step ([[C2]]) {
-// REDUCE-5mb-NO: scf.parallel
-// REDUCE-5mb:   [[LHS_SUBVIEW:%.*]] = memref.subview [[LHS]]
-// REDUCE-5mb:   [[RHS_SUBVIEW:%.*]] = memref.subview [[RHS]]
-// REDUCE-5mb:   [[SUM_SUBVIEW:%.*]] = memref.subview [[SUM]]
-// REDUCE-5mb:   linalg.generic {{.*}} ins([[LHS_SUBVIEW]], [[RHS_SUBVIEW]]{{.*}} outs([[SUM_SUBVIEW]]
-
+// REDUCE-5mb-DAG:     [[C0:%.*]] = constant 0 : index
+// REDUCE-5mb-DAG:     [[C64:%.*]] = constant 64 : index
+// REDUCE-5mb-DAG:     [[C2:%.*]] = constant 2 : index
+// REDUCE-5mb:         scf.parallel ([[I:%.*]]) = ([[C0]]) to ([[C64]]) step ([[C2]]) {
+// REDUCE-5mb-NO:      scf.parallel
+// REDUCE-5mb:            [[LHS_SUBVIEW:%.*]] = memref.subview [[LHS]]
+// REDUCE-5mb:            [[RHS_SUBVIEW:%.*]] = memref.subview [[RHS]]
+// REDUCE-5mb:            [[SUM_SUBVIEW:%.*]] = memref.subview [[SUM]]
+// REDUCE-5mb:            linalg.generic {{.*}} ins([[LHS_SUBVIEW]], [[RHS_SUBVIEW]]{{.*}} outs([[SUM_SUBVIEW]]
+// REDUCE-5mb-SAME:       {"linalg-max-memory-footprint" = {{[0-9]*}} : i64}
+// REDUCE-5mb:         {"luminous-launch"}
 
 // REDUCE-1mb-LABEL: func @function(
 // REDUCE-1mb-SAME:    [[LHS:%.*]]: {{.*}}, [[RHS:%.*]]: {{.*}}, [[SUM:%.*]]: {{.*}}) {
@@ -37,7 +38,8 @@ func @function(%arg0: memref<64x128x1024xf32>, %arg1: memref<64x128x1024xf32>, %
 // REDUCE-1mb:   [[RHS_SUBVIEW:%.*]] = memref.subview [[RHS]]
 // REDUCE-1mb:   [[SUM_SUBVIEW:%.*]] = memref.subview [[SUM]]
 // REDUCE-1mb:   linalg.generic {{.*}} ins([[LHS_SUBVIEW]], [[RHS_SUBVIEW]]{{.*}} outs([[SUM_SUBVIEW]]
-
+// REDUCE-1mb-SAME:       {"linalg-max-memory-footprint" = {{[0-9]*}} : i64}
+// REDUCE-1mb:         {"luminous-launch"}
 
 // REDUCE-10kb-LABEL: func @function(
 // REDUCE-10kb-SAME:    [[LHS:%.*]]: {{.*}}, [[RHS:%.*]]: {{.*}}, [[SUM:%.*]]: {{.*}}) {
@@ -53,6 +55,8 @@ func @function(%arg0: memref<64x128x1024xf32>, %arg1: memref<64x128x1024xf32>, %
 // REDUCE-10kb:   [[RHS_SUBVIEW:%.*]] = memref.subview [[RHS]]
 // REDUCE-10kb:   [[SUM_SUBVIEW:%.*]] = memref.subview [[SUM]]
 // REDUCE-10kb:   linalg.generic {{.*}} ins([[LHS_SUBVIEW]], [[RHS_SUBVIEW]]{{.*}} outs([[SUM_SUBVIEW]]
+// REDUCE-10kb-SAME:       {"linalg-max-memory-footprint" = {{[0-9]*}} : i64}
+// REDUCE-10kb:         {"luminous-launch"}
 
 #map2 = affine_map<(d0, d1, d2) -> (d0, d1, d2)>
 #map3 = affine_map<(d0, d1, d2) -> (d1, d2)>
@@ -77,7 +81,8 @@ func @function_bcast(%arg0: memref<64x128x1024xf32>, %arg1: memref<128x1024xf32>
 // REDUCE-5mb:   [[RHS_SUBVIEW:%.*]] = memref.subview [[RHS]]
 // REDUCE-5mb:   [[SUM_SUBVIEW:%.*]] = memref.subview [[SUM]]
 // REDUCE-5mb:   linalg.generic {{.*}} ins([[LHS_SUBVIEW]], [[RHS_SUBVIEW]]{{.*}} outs([[SUM_SUBVIEW]]
-
+// REDUCE-5mb-SAME:       {"linalg-max-memory-footprint" = {{[0-9]*}} : i64}
+// REDUCE-5mb:         {"luminous-launch"}
 
 // REDUCE-1mb-LABEL: func @function_bcast(
 // REDUCE-1mb-SAME:    [[LHS:%.*]]: {{.*}}, [[RHS:%.*]]: {{.*}}, [[SUM:%.*]]: {{.*}}) {
@@ -91,6 +96,8 @@ func @function_bcast(%arg0: memref<64x128x1024xf32>, %arg1: memref<128x1024xf32>
 // REDUCE-1mb:   [[RHS_SUBVIEW:%.*]] = memref.subview [[RHS]]
 // REDUCE-1mb:   [[SUM_SUBVIEW:%.*]] = memref.subview [[SUM]]
 // REDUCE-1mb:   linalg.generic {{.*}} ins([[LHS_SUBVIEW]], [[RHS_SUBVIEW]]{{.*}} outs([[SUM_SUBVIEW]]
+// REDUCE-1mb-SAME:       {"linalg-max-memory-footprint" = {{[0-9]*}} : i64}
+// REDUCE-1mb:         {"luminous-launch"}
 
 // REDUCE-10kb-LABEL: func @function_bcast(
 // REDUCE-10kb-SAME:    [[LHS:%.*]]: {{.*}}, [[RHS:%.*]]: {{.*}}, [[SUM:%.*]]: {{.*}}) {
@@ -106,3 +113,5 @@ func @function_bcast(%arg0: memref<64x128x1024xf32>, %arg1: memref<128x1024xf32>
 // REDUCE-10kb:   [[RHS_SUBVIEW:%.*]] = memref.subview [[RHS]]
 // REDUCE-10kb:   [[SUM_SUBVIEW:%.*]] = memref.subview [[SUM]]
 // REDUCE-10kb:   linalg.generic {{.*}} ins([[LHS_SUBVIEW]], [[RHS_SUBVIEW]]{{.*}} outs([[SUM_SUBVIEW]]
+// REDUCE-10kb-SAME:       {"linalg-max-memory-footprint" = {{[0-9]*}} : i64}
+// REDUCE-10kb:         {"luminous-launch"}
