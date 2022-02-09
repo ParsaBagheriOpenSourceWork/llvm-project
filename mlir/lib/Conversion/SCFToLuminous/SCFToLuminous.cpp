@@ -46,7 +46,12 @@ struct LuminousDispatchParallelRewrite
 /// Applies the conversion patterns in the given function.
 static LogicalResult applyPatterns(ModuleOp module) {
   ConversionTarget target(*module.getContext());
-  target.addIllegalOp<scf::ParallelOp>();
+
+  // parallel ops that still have launch attribute and
+  // parallel loops inside launch ops are illegal
+  target.addDynamicallyLegalOp<scf::ParallelOp>([](Operation *op) {
+    return !op->hasAttr(launchAttrName) && !op->getParentOfType<LaunchOp>();
+  });
   target.addLegalDialect<LuminousDialect, LinalgDialect, AsyncDialect>();
   RewritePatternSet patterns(module.getContext());
   patterns.add<LuminousDispatchParallelRewrite>(module.getContext());
@@ -66,9 +71,14 @@ struct SCFToLuminousPass
 
 LogicalResult LuminousDispatchParallelRewrite::matchAndRewrite(
     scf::ParallelOp op, PatternRewriter &rewriter) const {
-  auto module = op->getParentOfType<ModuleOp>();
+
+  // Only perform this conversion on attributed parallel ops
+  if (!op->hasAttr(launchAttrName))
+    return failure();
+
   if (op.getNumReductions() != 0)
     return failure();
+
   auto launchOp =
       rewriter.replaceOpWithNewOp<LaunchOp>(op, op.upperBound(), op.step());
   {
