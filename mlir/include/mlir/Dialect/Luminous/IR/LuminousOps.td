@@ -222,4 +222,49 @@ def Luminous_DispatchOp : Luminous_Op<"dispatch", [AttrSizedOperandSegments]>,
     attr-dict}];
 }
 
+//===----------------------------------------------------------------------===//
+// Luminous LaunchOp
+//===----------------------------------------------------------------------===//
+
+def Luminous_LaunchOp : Luminous_Op<"launch", [AttrSizedOperandSegments]>,
+                        Arguments<(ins Variadic<Index>:$shape,
+                                         Variadic<Index>:$step)> {
+  let summary = "luminous launch op";
+
+  let description = [{
+    Example:
+
+    ```mlir
+        module {
+            func @function(%arg0: memref<128xf32>) {
+            }
+        }
+    ```
+  }];
+
+  let regions = (region AnyRegion:$body);
+
+  let skipDefaultBuilders = 1;
+
+  let builders = [OpBuilder<(ins "ValueRange": $shape,
+                                 "ValueRange": $step)>];
+
+  let parser = [{ return parseLaunchOp(parser, result); }];
+  let printer = [{ return ::print(p, *this); }];
+}
+
+//===----------------------------------------------------------------------===//
+// Luminous YieldOp
+//===----------------------------------------------------------------------===//
+
+def Luminous_YieldOp : Luminous_Op<"yield", [HasParent<"LaunchOp">,
+                                             NoSideEffect, Terminator]> {
+  let summary = "Terminator for Luminous LaunchOp.";
+  let description = [{
+    A terminator operation for regions that appear in the body of `luminous.launch`.
+    Takes no operands.
+  }];
+
+  let assemblyFormat = "attr-dict";
+}
 #endif // LUMINOUS_OPS

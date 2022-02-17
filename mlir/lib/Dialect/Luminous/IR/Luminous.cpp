@@ -355,5 +355,67 @@ static void printDispatchOpOperands(OpAsmPrinter &printer, Operation *,
   printer << ")";
 }
 
+//===----------------------------------------------------------------------===//
+// LaunchOp
+//===----------------------------------------------------------------------===//
+
+void LaunchOp::build(OpBuilder &builder, OperationState &result,
+                     ValueRange shape, ValueRange step) {
+  result.addOperands(shape);
+  result.addOperands(step);
+  SmallVector<int32_t, 3> segmentSizes{static_cast<int32_t>(shape.size()),
+                                       static_cast<int32_t>(step.size())};
+  result.addAttribute(getOperandSegmentSizeAttr(),
+                      builder.getI32VectorAttr(segmentSizes));
+  result.addRegion();
+}
+
+static ParseResult parseLaunchOp(OpAsmParser &parser,
+                                   OperationState &result) {
+  auto &builder = parser.getBuilder();
+
+  // Parsing the operands
+  SmallVector<OpAsmParser::OperandType, 4> shape;
+  if (parser.parseKeyword("shape") ||
+      parser.parseOperandList(shape, /*requiredOperandCount=*/-1,
+                              OpAsmParser::Delimiter::Paren) ||
+      parser.resolveOperands(shape, builder.getIndexType(), result.operands))
+    return failure();
+
+  SmallVector<OpAsmParser::OperandType, 4> step;
+  if (parser.parseKeyword("step") ||
+      parser.parseOperandList(step, shape.size(),
+                              OpAsmParser::Delimiter::Paren) ||
+      parser.resolveOperands(step, builder.getIndexType(), result.operands))
+    return failure();
+
+  // Now parse the body.
+  SmallVector<OpAsmParser::OperandType, 4> regionOperands;
+  std::unique_ptr<Region> region = std::make_unique<Region>();
+  SmallVector<Type, 4> regionTypes;
+  if (parser.parseRegion(*region, regionOperands, regionTypes))
+    return failure();
+  result.addRegion(std::move(region));
+
+  // Set `operand_segment_sizes` attribute.
+  result.addAttribute(
+      LaunchOp::getOperandSegmentSizeAttr(),
+      builder.getI32VectorAttr({static_cast<int32_t>(shape.size()),
+                                static_cast<int32_t>(step.size())}));
+
+  // Parse attributes.
+  if (parser.parseOptionalAttrDict(result.attributes))
+    return failure();
+
+  return success();
+}
+
+static void print(OpAsmPrinter &p, LaunchOp op) {
+  p << " shape (" << op.shape() << ")"
+    << " step (" << op.step() << ")";
+  p.printRegion(op.body(), /*printEntryBlockArgs=*/true);
+  p.printOptionalAttrDict(
+      op->getAttrs(), /*elidedAttrs=*/LaunchOp::getOperandSegmentSizeAttr());
+}
 #define GET_OP_CLASSES
 #include "mlir/Dialect/Luminous/IR/LuminousOps.cpp.inc"

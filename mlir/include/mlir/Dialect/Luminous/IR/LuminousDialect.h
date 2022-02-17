@@ -13,6 +13,8 @@
 #ifndef MLIR_DIALECT_LUMINOUS_LUMINOUSDIALECT_H
 #define MLIR_DIALECT_LUMINOUS_LUMINOUSDIALECT_H
 
+#include "mlir/Dialect/Async/IR/Async.h"
+#include "mlir/Dialect/Async/IR/AsyncTypes.h"
 #include "mlir/Dialect/DLTI/Traits.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -20,12 +22,17 @@
 #include "mlir/IR/OpDefinition.h"
 #include "mlir/IR/OpImplementation.h"
 #include "mlir/IR/SymbolTable.h"
-#include "mlir/Dialect/Async/IR/Async.h"
-#include "mlir/Dialect/Async/IR/AsyncTypes.h"
 
 #include "mlir/Dialect/Luminous/IR/LuminousOpsDialect.h.inc"
 
 #define GET_OP_CLASSES
 #include "mlir/Dialect/Luminous/IR/LuminousOps.h.inc"
+
+namespace mlir {
+namespace luminous {
+constexpr char maxMemoryAttrName[] = "linalg-max-memory-footprint";
+constexpr char launchAttrName[] = "luminous-launch";
+} // namespace luminous
+} // namespace mlir
 
 #endif // MLIR_DIALECT_LUMINOUS_LUMINOUSDIALECT_H
