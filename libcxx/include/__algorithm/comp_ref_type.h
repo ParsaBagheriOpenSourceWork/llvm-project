@@ -11,8 +11,13 @@
 
 #include <__config>
 
+#ifdef _LIBCPP_DEBUG
+#  include <__debug>
+#  include <__utility/declval.h>
+#endif
+
 #if !defined(_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER)
-#pragma GCC system_header
+#  pragma GCC system_header
 #endif
 
 _LIBCPP_BEGIN_NAMESPACE_STD

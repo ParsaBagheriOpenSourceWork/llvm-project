@@ -16,16 +16,18 @@
 include "mlir/Dialect/Async/IR/AsyncTypes.td"
 include "mlir/Dialect/Luminous/IR/LuminousDialect.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
+include "mlir/IR/FunctionInterfaces.td"
 include "mlir/Dialect/DLTI/DLTIBase.td"
 include "mlir/IR/SymbolInterfaces.td"
 include "mlir/Interfaces/DataLayoutInterfaces.td"
+include "mlir/Interfaces/InferTypeOpInterface.td"
 
 
 //===----------------------------------------------------------------------===//
 // Luminous op definitions
 //===----------------------------------------------------------------------===//
 
-class Luminous_Op<string mnemonic, list<OpTrait> traits = []>
+class Luminous_Op<string mnemonic, list<Trait> traits = []>
     : Op<Luminous_Dialect, mnemonic, traits>;
 
 //===----------------------------------------------------------------------===//
@@ -52,10 +54,8 @@ def Luminous_LuminousModuleOp : Luminous_Op<"module", [
     ```
   }];
   let builders = [OpBuilder<(ins "StringRef" : $name)>];
-  let parser = [{ return ::parseLuminousModuleOp(parser, result); }];
-  let printer = [{ return ::print(p, *this); }];
   let regions = (region SizedRegion<1> : $body);
-
+  let hasCustomAssemblyFormat = 1;
   // We need to ensure the block inside the region is properly terminated;
   // the auto-generated builders do not guarantee that.
   let skipDefaultBuilders = 1;
@@ -79,7 +79,7 @@ def Luminous_ModuleEndOp
 //===----------------------------------------------------------------------===//
 
 def Luminous_LuminousFuncOp : Luminous_Op<"func", [
-  HasParent<"LuminousModuleOp">, AutomaticAllocationScope, FunctionLike,
+  HasParent<"LuminousModuleOp">, AutomaticAllocationScope, FunctionOpInterface,
   IsolatedFromAbove, Symbol
 ]> {
   let summary = "Function executable on a Luminous device";
@@ -117,12 +117,20 @@ def Luminous_LuminousFuncOp : Luminous_Op<"func", [
   ];
 
   let extraClassDeclaration = [{
-    // FunctionLike trait needs access to the functions below.
-    friend class OpTrait::FunctionLike<LuminousFuncOp>;
+    /// FIXME: We should drive this via the ODS `type` param.
+    FunctionType getType() {
+      return getTypeAttr().getValue().cast<FunctionType>();
+    }
 
     /// Hooks for the input/output type enumeration in FunctionLike .
     unsigned getNumFuncArguments() { return getType().getNumInputs(); }
     unsigned getNumFuncResults() { return getType().getNumResults(); }
+
+    /// Returns the argument types of this function.
+    ArrayRef<Type> getArgumentTypes() { return getType().getInputs(); }
+
+    /// Returns the result types of this function.
+    ArrayRef<Type> getResultTypes() { return getType().getResults(); }
 
     /// Hook for FunctionLike verifier.
     LogicalResult verifyType();
@@ -132,8 +140,7 @@ def Luminous_LuminousFuncOp : Luminous_Op<"func", [
   }];
 
   let verifier = [{ return ::verify(*this); }];
-  let printer = [{ printLuminousFuncOp(p, *this); }];
-  let parser = [{ return parseLuminousFuncOp(parser, result); }];
+  let hasCustomAssemblyFormat = 1;
 }
 
 //===----------------------------------------------------------------------===//
@@ -222,4 +229,45 @@ def Luminous_DispatchOp : Luminous_Op<"dispatch", [AttrSizedOperandSegments]>,
     attr-dict}];
 }
 
+//===----------------------------------------------------------------------===//
+// Luminous LaunchOp
+//===----------------------------------------------------------------------===//
+
+def Luminous_LaunchOp : Luminous_Op<"launch", [AttrSizedOperandSegments]>,
+                        Arguments<(ins Variadic<Index>:$shape,
+                                         Variadic<Index>:$step)> {
+  let summary = "luminous launch op";
+
+  let description = [{
+    Example:
+
+    ```mlir
+        module {
+            func @function(%arg0: memref<128xf32>) {
+            }
+        }
+    ```
+  }];
+
+  let regions = (region AnyRegion:$body);
+  let skipDefaultBuilders = 1;
+  let hasCustomAssemblyFormat = 1;
+  let builders = [OpBuilder<(ins "ValueRange": $shape,
+                                 "ValueRange": $step)>];
+}
+
+//===----------------------------------------------------------------------===//
+// Luminous YieldOp
+//===----------------------------------------------------------------------===//
+
+def Luminous_YieldOp : Luminous_Op<"yield", [HasParent<"LaunchOp">,
+                                             NoSideEffect, Terminator]> {
+  let summary = "Terminator for Luminous LaunchOp.";
+  let description = [{
+    A terminator operation for regions that appear in the body of `luminous.launch`.
+    Takes no operands.
+  }];
+
+  let assemblyFormat = "attr-dict";
+}
 #endif // LUMINOUS_OPS

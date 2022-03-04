@@ -36,8 +36,9 @@ void LuminousDialect::initialize() {
 
 LogicalResult LuminousDialect::verifyOperationAttribute(Operation *op,
                                                         NamedAttribute attr) {
-  if (!attr.second.isa<UnitAttr>() ||
-      attr.first != getContainerModuleAttrName())
+
+  if (!attr.getValue().isa<UnitAttr>() ||
+      attr.getName() != getContainerModuleAttrName())
     return success();
 
   auto module = dyn_cast<ModuleOp>(op);
@@ -108,10 +109,10 @@ void LuminousModuleOp::build(OpBuilder &builder, OperationState &result,
       ::mlir::SymbolTable::getSymbolAttrName(), builder.getStringAttr(name)));
 }
 
-static ParseResult parseLuminousModuleOp(OpAsmParser &parser,
+ParseResult LuminousModuleOp::parse(OpAsmParser &parser,
                                          OperationState &result) {
   StringAttr nameAttr;
-  if (parser.parseSymbolName(nameAttr, SymbolTable::getSymbolAttrName(),
+  if (parser.parseSymbolName(nameAttr, ::SymbolTable::getSymbolAttrName(),
                              result.attributes))
     return failure();
 
@@ -130,12 +131,12 @@ static ParseResult parseLuminousModuleOp(OpAsmParser &parser,
   return success();
 }
 
-static void print(OpAsmPrinter &p, LuminousModuleOp op) {
+void LuminousModuleOp::print(OpAsmPrinter &p) {
   p << ' ';
-  p.printSymbolName(op.getName());
-  p.printOptionalAttrDictWithKeyword(op->getAttrs(),
-                                     {SymbolTable::getSymbolAttrName()});
-  p.printRegion(op->getRegion(0), /*printEntryBlockArgs=*/false,
+  p.printSymbolName(getName());
+  p.printOptionalAttrDictWithKeyword(getOperation()->getAttrs(),
+                                     {::SymbolTable::getSymbolAttrName()});
+  p.printRegion(getOperation()->getRegion(0), /*printEntryBlockArgs=*/false,
                 /*printBlockTerminators=*/false);
 }
 
@@ -150,16 +151,13 @@ void LuminousFuncOp::build(OpBuilder &builder, OperationState &result,
                       builder.getStringAttr(name));
   result.addAttribute(getTypeAttrName(), TypeAttr::get(type));
   result.addAttributes(attrs);
-  Region *body = result.addRegion();
-  Block *entryBlock = new Block;
-  entryBlock->addArguments(type.getInputs());
-  body->getBlocks().push_back(entryBlock);
+  result.addRegion();
 }
 
-static ParseResult parseLuminousFuncOp(OpAsmParser &parser,
-                                       OperationState &result) {
+ParseResult LuminousFuncOp::parse(OpAsmParser &parser, OperationState &result) {
   SmallVector<OpAsmParser::OperandType, 8> entryArgs;
   SmallVector<NamedAttrList, 1> argAttrs;
+  SmallVector<Location> argLocations;
   SmallVector<NamedAttrList, 1> resultAttrs;
   SmallVector<Type, 8> argTypes;
   SmallVector<Type, 4> resultTypes;
@@ -172,9 +170,9 @@ static ParseResult parseLuminousFuncOp(OpAsmParser &parser,
     return failure();
 
   auto signatureLocation = parser.getCurrentLocation();
-  if (failed(function_like_impl::parseFunctionSignature(
+  if (failed(function_interface_impl::parseFunctionSignature(
           parser, /*allowVariadic=*/false, entryArgs, argTypes, argAttrs,
-          isVariadic, resultTypes, resultAttrs)))
+          argLocations, isVariadic, resultTypes, resultAttrs)))
     return failure();
 
   if (entryArgs.empty() && !argTypes.empty())
@@ -192,8 +190,8 @@ static ParseResult parseLuminousFuncOp(OpAsmParser &parser,
   // Parse attributes.
   if (failed(parser.parseOptionalAttrDictWithKeyword(result.attributes)))
     return failure();
-  function_like_impl::addArgAndResultAttrs(builder, result, argAttrs,
-                                           resultAttrs);
+  function_interface_impl::addArgAndResultAttrs(builder, result, argAttrs,
+                                                resultAttrs);
 
   // Parse the region. If no argument names were provided, take all names
   // (including those of attributions) from the entry block.
@@ -201,18 +199,18 @@ static ParseResult parseLuminousFuncOp(OpAsmParser &parser,
   return parser.parseRegion(*body, entryArgs, argTypes);
 }
 
-static void printLuminousFuncOp(OpAsmPrinter &p, LuminousFuncOp op) {
+void LuminousFuncOp::print(OpAsmPrinter &p) {
   p << ' ';
-  p.printSymbolName(op.getName());
+  p.printSymbolName(getName());
 
-  FunctionType type = op.getType();
-  function_like_impl::printFunctionSignature(
-      p, op.getOperation(), type.getInputs(),
+  FunctionType type = getType();
+  function_interface_impl::printFunctionSignature(
+      p, getOperation(), type.getInputs(),
       /*isVariadic=*/false, type.getResults());
 
-  function_like_impl::printFunctionAttributes(
-      p, op.getOperation(), type.getNumInputs(), type.getNumResults(), {});
-  p.printRegion(op.getBody(), /*printEntryBlockArgs=*/false);
+  function_interface_impl::printFunctionAttributes(
+      p, getOperation(), type.getNumInputs(), type.getNumResults(), {});
+  p.printRegion(getBody(), /*printEntryBlockArgs=*/false);
 }
 
 LogicalResult LuminousFuncOp::verifyType() {
@@ -335,10 +333,12 @@ parseDispatchOpOperands(OpAsmParser &parser,
                         SmallVectorImpl<OpAsmParser::OperandType> &argNames,
                         SmallVectorImpl<Type> &argTypes) {
   SmallVector<NamedAttrList, 4> argAttrs;
+  SmallVector<Location, 4> argLocations;
   bool isVariadic = false;
-  return function_like_impl::parseFunctionArgumentList(
+  return function_interface_impl::parseFunctionArgumentList(
       parser, /*allowAttributes=*/false,
-      /*allowVariadic=*/false, argNames, argTypes, argAttrs, isVariadic);
+      /*allowVariadic=*/false, argNames, argTypes, argAttrs, argLocations,
+      isVariadic);
 }
 
 static void printDispatchOpOperands(OpAsmPrinter &printer, Operation *,
@@ -355,5 +355,67 @@ static void printDispatchOpOperands(OpAsmPrinter &printer, Operation *,
   printer << ")";
 }
 
+//===----------------------------------------------------------------------===//
+// LaunchOp
+//===----------------------------------------------------------------------===//
+
+void LaunchOp::build(OpBuilder &builder, OperationState &result,
+                     ValueRange shape, ValueRange step) {
+  result.addOperands(shape);
+  result.addOperands(step);
+  SmallVector<int32_t, 3> segmentSizes{static_cast<int32_t>(shape.size()),
+                                       static_cast<int32_t>(step.size())};
+  result.addAttribute(getOperandSegmentSizeAttr(),
+                      builder.getI32VectorAttr(segmentSizes));
+  result.addRegion();
+}
+
+ParseResult LaunchOp::parse(OpAsmParser &parser, OperationState &result) {
+  auto &builder = parser.getBuilder();
+
+  // Parsing the operands
+  SmallVector<OpAsmParser::OperandType, 4> shape;
+  if (parser.parseKeyword("shape") ||
+      parser.parseOperandList(shape, /*requiredOperandCount=*/-1,
+                              OpAsmParser::Delimiter::Paren) ||
+      parser.resolveOperands(shape, builder.getIndexType(), result.operands))
+    return failure();
+
+  SmallVector<OpAsmParser::OperandType, 4> step;
+  if (parser.parseKeyword("step") ||
+      parser.parseOperandList(step, shape.size(),
+                              OpAsmParser::Delimiter::Paren) ||
+      parser.resolveOperands(step, builder.getIndexType(), result.operands))
+    return failure();
+
+  // Now parse the body.
+  SmallVector<OpAsmParser::OperandType, 4> regionOperands;
+  std::unique_ptr<Region> region = std::make_unique<Region>();
+  SmallVector<Type, 4> regionTypes;
+  if (parser.parseRegion(*region, regionOperands, regionTypes))
+    return failure();
+  result.addRegion(std::move(region));
+
+  // Set `operand_segment_sizes` attribute.
+  result.addAttribute(
+      LaunchOp::getOperandSegmentSizeAttr(),
+      builder.getI32VectorAttr({static_cast<int32_t>(shape.size()),
+                                static_cast<int32_t>(step.size())}));
+
+  // Parse attributes.
+  if (parser.parseOptionalAttrDict(result.attributes))
+    return failure();
+
+  return success();
+}
+
+void LaunchOp::print(OpAsmPrinter &p) {
+  p << " shape (" << shape() << ")"
+    << " step (" << step() << ")";
+  p.printRegion(body(), /*printEntryBlockArgs=*/true);
+  p.printOptionalAttrDict(
+      getOperation()->getAttrs(),
+      /*elidedAttrs=*/LaunchOp::getOperandSegmentSizeAttr());
+}
 #define GET_OP_CLASSES
 #include "mlir/Dialect/Luminous/IR/LuminousOps.cpp.inc"

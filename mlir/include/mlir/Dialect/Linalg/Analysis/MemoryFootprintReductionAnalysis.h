@@ -9,7 +9,7 @@
 #ifndef MLIR_DIALECT_ANALYSIS_MEMORYFOOTPRINTREDUCTIONANALYSIS_H_
 #define MLIR_DIALECT_ANALYSIS_MEMORYFOOTPRINTREDUCTIONANALYSIS_H_
 
-#include "mlir/Dialect/Linalg/IR/LinalgOps.h"
+#include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Pass/Pass.h"
 
 using namespace mlir;

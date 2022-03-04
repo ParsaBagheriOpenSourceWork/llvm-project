@@ -20,11 +20,14 @@ using namespace llvm::orc::rt_bootstrap;
 
 namespace {
 
-orc::shared::detail::CWrapperFunctionResult
-incrementWrapper(const char *ArgData, size_t ArgSize) {
-  return WrapperFunction<void(SPSExecutorAddress)>::handle(
+orc::shared::CWrapperFunctionResult incrementWrapper(const char *ArgData,
+                                                     size_t ArgSize) {
+  return WrapperFunction<SPSError(SPSExecutorAddr)>::handle(
              ArgData, ArgSize,
-             [](ExecutorAddress A) { *A.toPtr<int *>() += 1; })
+             [](ExecutorAddr A) -> Error {
+               *A.toPtr<int *>() += 1;
+               return Error::success();
+             })
       .release();
 }
 
@@ -38,16 +41,7 @@ TEST(SimpleExecutorMemoryManagerTest, AllocFinalizeFree) {
   std::string HW = "Hello, world!";
 
   int FinalizeCounter = 0;
-  auto FinalizeCounterAddrArgBuffer =
-      orc::shared::detail::serializeViaSPSToWrapperFunctionResult<
-          SPSArgList<SPSExecutorAddress>>(
-          ExecutorAddress::fromPtr(&FinalizeCounter));
-
   int DeallocateCounter = 0;
-  auto DeallocateCounterAddrArgBuffer =
-      orc::shared::detail::serializeViaSPSToWrapperFunctionResult<
-          SPSArgList<SPSExecutorAddress>>(
-          ExecutorAddress::fromPtr(&DeallocateCounter));
 
   tpctypes::FinalizeRequest FR;
   FR.Segments.push_back(
@@ -57,13 +51,13 @@ TEST(SimpleExecutorMemoryManagerTest, AllocFinalizeFree) {
                                    {HW.data(), HW.size() + 1}});
   FR.Actions.push_back(
       {/* Finalize: */
-       {ExecutorAddress::fromPtr(incrementWrapper),
-        ExecutorAddress::fromPtr(FinalizeCounterAddrArgBuffer.data()),
-        FinalizeCounterAddrArgBuffer.size()},
+       cantFail(WrapperFunctionCall::Create<SPSArgList<SPSExecutorAddr>>(
+           ExecutorAddr::fromPtr(incrementWrapper),
+           ExecutorAddr::fromPtr(&FinalizeCounter))),
        /*  Deallocate: */
-       {ExecutorAddress::fromPtr(incrementWrapper),
-        ExecutorAddress::fromPtr(DeallocateCounterAddrArgBuffer.data()),
-        DeallocateCounterAddrArgBuffer.size()}});
+       cantFail(WrapperFunctionCall::Create<SPSArgList<SPSExecutorAddr>>(
+           ExecutorAddr::fromPtr(incrementWrapper),
+           ExecutorAddr::fromPtr(&DeallocateCounter)))});
 
   EXPECT_EQ(FinalizeCounter, 0);
   EXPECT_EQ(DeallocateCounter, 0);

@@ -1,6 +1,6 @@
-========================================
-Clang 14.0.0 (In-Progress) Release Notes
-========================================
+===========================================
+Clang |release| |ReleaseNotesTitle|
+===========================================
 
 .. contents::
    :local:
@@ -8,17 +8,18 @@ Clang 14.0.0 (In-Progress) Release Notes
 
 Written by the `LLVM Team <https://llvm.org/>`_
 
-.. warning::
+.. only:: PreRelease
 
-   These are in-progress notes for the upcoming Clang 14 release.
-   Release notes for previous releases can be found on
-   `the Download Page <https://releases.llvm.org/download.html>`_.
+  .. warning::
+     These are in-progress notes for the upcoming Clang |version| release.
+     Release notes for previous releases can be found on
+     `the Download Page <https://releases.llvm.org/download.html>`_.
 
 Introduction
 ============
 
 This document contains the release notes for the Clang C/C++/Objective-C
-frontend, part of the LLVM Compiler Infrastructure, release 14.0.0. Here we
+frontend, part of the LLVM Compiler Infrastructure, release |release|. Here we
 describe the status of Clang in some detail, including major
 improvements from the previous release and new feature work. For the
 general LLVM release notes, see `the LLVM
@@ -35,8 +36,8 @@ main Clang web page, this document applies to the *next* release, not
 the current one. To see the release notes for a specific release, please
 see the `releases page <https://llvm.org/releases/>`_.
 
-What's New in Clang 14.0.0?
-===========================
+What's New in Clang |release|?
+==============================
 
 Some of the major new features and improvements to Clang are listed
 here. Generic improvements to Clang as a whole or to its underlying
@@ -51,42 +52,20 @@ Major New Features
 Improvements to Clang's diagnostics
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-- ...
-
 Non-comprehensive list of changes in this release
 -------------------------------------------------
-
-- Maximum _ExtInt size was decreased from 16,777,215 bits to 8,388,608 bits.
-  Motivation for this was discussed in PR51829.
 
 New Compiler Flags
 ------------------
 
-- ...
-
 Deprecated Compiler Flags
 -------------------------
-
-- ...
 
 Modified Compiler Flags
 -----------------------
 
-- Support has been added for the following processors (``-mcpu`` identifiers in parentheses):
-
-  - RISC-V SiFive E20 (``sifive-e20``).
-  - RISC-V SiFive E21 (``sifive-e21``).
-  - RISC-V SiFive E24 (``sifive-e24``).
-  - RISC-V SiFive E34 (``sifive-e34``).
-  - RISC-V SiFive S21 (``sifive-s21``).
-  - RISC-V SiFive S51 (``sifive-s51``).
-  - RISC-V SiFive S54 (``sifive-s54``).
-  - RISC-V SiFive S76 (``sifive-s76``).
-
 Removed Compiler Flags
 -------------------------
-
-- ...
 
 New Pragmas in Clang
 --------------------
@@ -96,31 +75,11 @@ New Pragmas in Clang
 Attribute Changes in Clang
 --------------------------
 
-- Attributes loaded as clang plugins which are sensitive to LangOpts must
-  now override ``acceptsLangOpts`` instead of ``diagLangOpts``.
-  Returning false will produce a generic "attribute ignored" diagnostic, as
-  with clang's built-in attributes.
-  If plugins want to provide richer diagnostics, they can do so when the
-  attribute is handled instead, e.g. in ``handleDeclAttribute``.
-  (This was changed in order to better support attributes in code completion).
-
 Windows Support
 ---------------
 
-- An MSVC compatibility workaround for C++ operator names was removed. As a
-  result, the ``<query.h>`` Windows SDK header may not compile out of the box.
-  Users should use a recent SDK and pass ``-DQUERY_H_RESTRICTION_PERMISSIVE``
-  or pass ``/permissive`` to disable C++ operator names altogether. See
-  `PR42427 <https://llvm.org/pr42427>` for more info.
-
 C Language Changes in Clang
 ---------------------------
-
-- Wide multi-characters literals such as ``L'ab'`` that would previously be interpreted as ``L'b'``
-  are now ill-formed in all language modes. The motivation for this change is outlined in
-  `P2362 <wg21.link/P2362>`_.
-- Support for ``__attribute__((error("")))`` and
-  ``__attribute__((warning("")))`` function attributes have been added.
 
 C++ Language Changes in Clang
 -----------------------------
@@ -129,17 +88,12 @@ C++ Language Changes in Clang
 
 C++20 Feature Support
 ^^^^^^^^^^^^^^^^^^^^^
-...
 
 C++2b Feature Support
 ^^^^^^^^^^^^^^^^^^^^^
-...
 
 CUDA Language Changes in Clang
 ------------------------------
-
-- Clang now supports CUDA versions up to 11.4.
-- Default GPU architecture has been changed from sm_20 to sm_35.
 
 Objective-C Language Changes in Clang
 -------------------------------------
@@ -155,8 +109,18 @@ ABI Changes in Clang
 OpenMP Support in Clang
 -----------------------
 
-- ``clang-nvlink-wrapper`` tool introduced to support linking of cubin files archived in an archive. See :doc:`ClangNvlinkWrapper`.
-
+- ``clang-nvlink-wrapper`` tool introduced to support linking of cubin files
+  archived in an archive. See :doc:`ClangNvlinkWrapper`.
+- ``clang-linker-wrapper`` tool introduced to support linking using a new OpenMP
+  target offloading method. See :doc:`ClangLinkerWrapper`.
+- Support for a new driver for OpenMP target offloading has been added as an
+  opt-in feature. The new driver can be selected using ``-fopenmp-new-driver``
+  with clang. Device-side LTO can also be enabled using the new driver by
+  passing ``-foffload-lto=`` as well. The new driver supports the following
+  features:
+  - Linking AMDGPU and NVPTX offloading targets.
+  - Static linking using archive files.
+  - Device-side LTO.
 
 CUDA Support in Clang
 ---------------------
@@ -166,28 +130,26 @@ CUDA Support in Clang
 X86 Support in Clang
 --------------------
 
-- Support for ``AVX512-FP16`` instructions has been added.
+DWARF Support in Clang
+----------------------
+
+Arm and AArch64 Support in Clang
+--------------------------------
+
+Floating Point Support in Clang
+-------------------------------
 
 Internal API Changes
 --------------------
 
-- ...
-
 Build System Changes
 --------------------
-
-- ...
 
 AST Matchers
 ------------
 
-- ...
-
 clang-format
 ------------
-
-- Option ``AllowShortEnumsOnASingleLine: false`` has been improved, it now
-  correctly places the opening brace according to ``BraceWrapping.AfterEnum``.
 
 libclang
 --------

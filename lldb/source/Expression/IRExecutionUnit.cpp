@@ -26,14 +26,15 @@
 #include "lldb/Symbol/SymbolFile.h"
 #include "lldb/Symbol/SymbolVendor.h"
 #include "lldb/Target/ExecutionContext.h"
+#include "lldb/Target/Language.h"
 #include "lldb/Target/LanguageRuntime.h"
 #include "lldb/Target/Target.h"
 #include "lldb/Utility/DataBufferHeap.h"
 #include "lldb/Utility/DataExtractor.h"
 #include "lldb/Utility/LLDBAssert.h"
+#include "lldb/Utility/LLDBLog.h"
 #include "lldb/Utility/Log.h"
 
-#include "lldb/../../source/Plugins/Language/CPlusPlus/CPlusPlusLanguage.h"
 #include "lldb/../../source/Plugins/ObjectFile/JIT/ObjectFileJIT.h"
 
 using namespace lldb_private;
@@ -70,8 +71,7 @@ lldb::addr_t IRExecutionUnit::WriteNow(const uint8_t *bytes, size_t size,
     return LLDB_INVALID_ADDRESS;
   }
 
-  if (Log *log =
-          lldb_private::GetLogIfAllCategoriesSet(LIBLLDB_LOG_EXPRESSIONS)) {
+  if (Log *log = GetLog(LLDBLog::Expressions)) {
     DataBufferHeap my_buffer(size, 0);
     Status err;
     ReadMemory(my_buffer.GetBytes(), allocation_process_addr, size, err);
@@ -99,7 +99,7 @@ void IRExecutionUnit::FreeNow(lldb::addr_t allocation) {
 
 Status IRExecutionUnit::DisassembleFunction(Stream &stream,
                                             lldb::ProcessSP &process_wp) {
-  Log *log(lldb_private::GetLogIfAllCategoriesSet(LIBLLDB_LOG_EXPRESSIONS));
+  Log *log = GetLog(LLDBLog::Expressions);
 
   ExecutionContext exe_ctx(process_wp);
 
@@ -254,7 +254,7 @@ void IRExecutionUnit::GetRunnableInfo(Status &error, lldb::addr_t &func_addr,
 
   m_did_jit = true;
 
-  Log *log(lldb_private::GetLogIfAllCategoriesSet(LIBLLDB_LOG_EXPRESSIONS));
+  Log *log = GetLog(LLDBLog::Expressions);
 
   std::string error_string;
 
@@ -483,8 +483,6 @@ void IRExecutionUnit::GetRunnableInfo(Status &error, lldb::addr_t &func_addr,
 
   func_addr = m_function_load_addr;
   func_end = m_function_end_load_addr;
-
-  return;
 }
 
 IRExecutionUnit::~IRExecutionUnit() {
@@ -594,7 +592,7 @@ lldb::SectionType IRExecutionUnit::GetSectionTypeFromSectionName(
 uint8_t *IRExecutionUnit::MemoryManager::allocateCodeSection(
     uintptr_t Size, unsigned Alignment, unsigned SectionID,
     llvm::StringRef SectionName) {
-  Log *log(lldb_private::GetLogIfAllCategoriesSet(LIBLLDB_LOG_EXPRESSIONS));
+  Log *log = GetLog(LLDBLog::Expressions);
 
   uint8_t *return_value = m_default_mm_up->allocateCodeSection(
       Size, Alignment, SectionID, SectionName);
@@ -624,7 +622,7 @@ uint8_t *IRExecutionUnit::MemoryManager::allocateCodeSection(
 uint8_t *IRExecutionUnit::MemoryManager::allocateDataSection(
     uintptr_t Size, unsigned Alignment, unsigned SectionID,
     llvm::StringRef SectionName, bool IsReadOnly) {
-  Log *log(lldb_private::GetLogIfAllCategoriesSet(LIBLLDB_LOG_EXPRESSIONS));
+  Log *log = GetLog(LLDBLog::Expressions);
 
   uint8_t *return_value = m_default_mm_up->allocateDataSection(
       Size, Alignment, SectionID, SectionName, IsReadOnly);
@@ -652,52 +650,6 @@ uint8_t *IRExecutionUnit::MemoryManager::allocateDataSection(
   return return_value;
 }
 
-static ConstString FindBestAlternateMangledName(ConstString demangled,
-                                                const SymbolContext &sym_ctx) {
-  CPlusPlusLanguage::MethodName cpp_name(demangled);
-  std::string scope_qualified_name = cpp_name.GetScopeQualifiedName();
-
-  if (!scope_qualified_name.size())
-    return ConstString();
-
-  if (!sym_ctx.module_sp)
-    return ConstString();
-
-  lldb_private::SymbolFile *sym_file = sym_ctx.module_sp->GetSymbolFile();
-  if (!sym_file)
-    return ConstString();
-
-  std::vector<ConstString> alternates;
-  sym_file->GetMangledNamesForFunction(scope_qualified_name, alternates);
-
-  std::vector<ConstString> param_and_qual_matches;
-  std::vector<ConstString> param_matches;
-  for (size_t i = 0; i < alternates.size(); i++) {
-    ConstString alternate_mangled_name = alternates[i];
-    Mangled mangled(alternate_mangled_name);
-    ConstString demangled = mangled.GetDemangledName();
-
-    CPlusPlusLanguage::MethodName alternate_cpp_name(demangled);
-    if (!cpp_name.IsValid())
-      continue;
-
-    if (alternate_cpp_name.GetArguments() == cpp_name.GetArguments()) {
-      if (alternate_cpp_name.GetQualifiers() == cpp_name.GetQualifiers())
-        param_and_qual_matches.push_back(alternate_mangled_name);
-      else
-        param_matches.push_back(alternate_mangled_name);
-    }
-  }
-
-  if (param_and_qual_matches.size())
-    return param_and_qual_matches[0]; // It is assumed that there will be only
-                                      // one!
-  else if (param_matches.size())
-    return param_matches[0]; // Return one of them as a best match
-  else
-    return ConstString();
-}
-
 void IRExecutionUnit::CollectCandidateCNames(std::vector<ConstString> &C_names,
                                              ConstString name) {
   if (m_strip_underscore && name.AsCString()[0] == '_')
@@ -708,51 +660,26 @@ void IRExecutionUnit::CollectCandidateCNames(std::vector<ConstString> &C_names,
 void IRExecutionUnit::CollectCandidateCPlusPlusNames(
     std::vector<ConstString> &CPP_names,
     const std::vector<ConstString> &C_names, const SymbolContext &sc) {
-  for (const ConstString &name : C_names) {
-    if (CPlusPlusLanguage::IsCPPMangledName(name.GetCString())) {
+  if (auto *cpp_lang = Language::FindPlugin(lldb::eLanguageTypeC_plus_plus)) {
+    for (const ConstString &name : C_names) {
       Mangled mangled(name);
-      ConstString demangled = mangled.GetDemangledName();
-
-      if (demangled) {
-        ConstString best_alternate_mangled_name =
-            FindBestAlternateMangledName(demangled, sc);
-
-        if (best_alternate_mangled_name) {
-          CPP_names.push_back(best_alternate_mangled_name);
+      if (cpp_lang->SymbolNameFitsToLanguage(mangled)) {
+        if (ConstString best_alternate =
+                cpp_lang->FindBestAlternateFunctionMangledName(mangled, sc)) {
+          CPP_names.push_back(best_alternate);
         }
       }
-    }
 
-    if (auto *cpp_lang = Language::FindPlugin(lldb::eLanguageTypeC_plus_plus)) {
       std::vector<ConstString> alternates =
           cpp_lang->GenerateAlternateFunctionManglings(name);
       CPP_names.insert(CPP_names.end(), alternates.begin(), alternates.end());
+
+      // As a last-ditch fallback, try the base name for C++ names.  It's
+      // terrible, but the DWARF doesn't always encode "extern C" correctly.
+      ConstString basename =
+          cpp_lang->GetDemangledFunctionNameWithoutArguments(mangled);
+      CPP_names.push_back(basename);
     }
-  }
-}
-
-void IRExecutionUnit::CollectFallbackNames(
-    std::vector<ConstString> &fallback_names,
-    const std::vector<ConstString> &C_names) {
-  // As a last-ditch fallback, try the base name for C++ names.  It's terrible,
-  // but the DWARF doesn't always encode "extern C" correctly.
-
-  for (const ConstString &name : C_names) {
-    if (!CPlusPlusLanguage::IsCPPMangledName(name.GetCString()))
-      continue;
-
-    Mangled mangled_name(name);
-    ConstString demangled_name = mangled_name.GetDemangledName();
-    if (demangled_name.IsEmpty())
-      continue;
-
-    const char *demangled_cstr = demangled_name.AsCString();
-    const char *lparen_loc = strchr(demangled_cstr, '(');
-    if (!lparen_loc)
-      continue;
-
-    llvm::StringRef base_name(demangled_cstr, lparen_loc - demangled_cstr);
-    fallback_names.push_back(ConstString(base_name));
   }
 }
 
@@ -950,20 +877,12 @@ lldb::addr_t IRExecutionUnit::FindSymbol(lldb_private::ConstString name,
   CollectCandidateCPlusPlusNames(candidate_CPlusPlus_names, candidate_C_names,
                                  m_sym_ctx);
   ret = FindInSymbols(candidate_CPlusPlus_names, m_sym_ctx, missing_weak);
-  if (ret != LLDB_INVALID_ADDRESS)
-    return ret;
-
-  std::vector<ConstString> candidate_fallback_names;
-
-  CollectFallbackNames(candidate_fallback_names, candidate_C_names);
-  ret = FindInSymbols(candidate_fallback_names, m_sym_ctx, missing_weak);
-
   return ret;
 }
 
 void IRExecutionUnit::GetStaticInitializers(
     std::vector<lldb::addr_t> &static_initializers) {
-  Log *log(lldb_private::GetLogIfAllCategoriesSet(LIBLLDB_LOG_EXPRESSIONS));
+  Log *log = GetLog(LLDBLog::Expressions);
 
   llvm::GlobalVariable *global_ctors =
       m_module->getNamedGlobal("llvm.global_ctors");
@@ -1031,7 +950,7 @@ IRExecutionUnit::MemoryManager::getSymbolAddress(const std::string &Name) {
 uint64_t 
 IRExecutionUnit::MemoryManager::GetSymbolAddressAndPresence(
     const std::string &Name, bool &missing_weak) {
-  Log *log(lldb_private::GetLogIfAllCategoriesSet(LIBLLDB_LOG_EXPRESSIONS));
+  Log *log = GetLog(LLDBLog::Expressions);
 
   ConstString name_cs(Name.c_str());
 
@@ -1058,7 +977,7 @@ void *IRExecutionUnit::MemoryManager::getPointerToNamedFunction(
 
 lldb::addr_t
 IRExecutionUnit::GetRemoteAddressForLocal(lldb::addr_t local_address) {
-  Log *log(lldb_private::GetLogIfAllCategoriesSet(LIBLLDB_LOG_EXPRESSIONS));
+  Log *log = GetLog(LLDBLog::Expressions);
 
   for (AllocationRecord &record : m_records) {
     if (local_address >= record.m_host_address &&

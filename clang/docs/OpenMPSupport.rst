@@ -95,7 +95,8 @@ Features not supported or with limited support for Cuda devices
 
 - Nested parallelism: inner parallel regions are executed sequentially.
 
-- Static linking of libraries containing device code is not supported yet.
+- Static linking of libraries containing device code is not supported without
+  explicitly using ``-fopenmp-new-driver``.
 
 - Automatic translation of math functions in target regions to device-specific
   math functions is not implemented yet.
@@ -147,7 +148,7 @@ implementation.
 +------------------------------+--------------------------------------------------------------+--------------------------+-----------------------------------------------------------------------+
 | task extension               | task affinity                                                | :part:`not upstream`     | https://github.com/jklinkenberg/openmp/tree/task-affinity             |
 +------------------------------+--------------------------------------------------------------+--------------------------+-----------------------------------------------------------------------+
-| task extension               | clause: depend on the taskwait construct                     | :part:`worked on`        |                                                                       |
+| task extension               | clause: depend on the taskwait construct                     | :part:`mostly done`      | D113540 (regular codegen only)                                        |
 +------------------------------+--------------------------------------------------------------+--------------------------+-----------------------------------------------------------------------+
 | task extension               | depend objects and detachable tasks                          | :good:`done`             |                                                                       |
 +------------------------------+--------------------------------------------------------------+--------------------------+-----------------------------------------------------------------------+
@@ -266,7 +267,7 @@ want to help with the implementation.
 +==============================+==============================================================+==========================+=======================================================================+
 | atomic extension             | 'compare' clause on atomic construct                         | :good:`worked on`        |                                                                       |
 +------------------------------+--------------------------------------------------------------+--------------------------+-----------------------------------------------------------------------+
-| atomic extension             | 'fail' clause on atomic construct                            | :none:`unclaimed`        |                                                                       |
+| atomic extension             | 'fail' clause on atomic construct                            | :part:`worked on`        |                                                                       |
 +------------------------------+--------------------------------------------------------------+--------------------------+-----------------------------------------------------------------------+
 | base language                | C++ attribute specifier syntax                               | :good:`done`             | D105648                                                               |
 +------------------------------+--------------------------------------------------------------+--------------------------+-----------------------------------------------------------------------+

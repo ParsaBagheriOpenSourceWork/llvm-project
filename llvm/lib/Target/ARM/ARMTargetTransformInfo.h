@@ -189,6 +189,18 @@ public:
     return isLegalMaskedLoad(DataTy, Alignment);
   }
 
+  bool forceScalarizeMaskedGather(VectorType *VTy, Align Alignment) {
+    // For MVE, we have a custom lowering pass that will already have custom
+    // legalised any gathers that we can lower to MVE intrinsics, and want to
+    // expand all the rest. The pass runs before the masked intrinsic lowering
+    // pass.
+    return true;
+  }
+
+  bool forceScalarizeMaskedScatter(VectorType *VTy, Align Alignment) {
+    return forceScalarizeMaskedGather(VTy, Alignment);
+  }
+
   bool isLegalMaskedGather(Type *Ty, Align Alignment);
 
   bool isLegalMaskedScatter(Type *Ty, Align Alignment) {
@@ -231,8 +243,7 @@ public:
                                             const SCEV *Ptr);
 
   InstructionCost getArithmeticInstrCost(
-      unsigned Opcode, Type *Ty,
-      TTI::TargetCostKind CostKind = TTI::TCK_RecipThroughput,
+      unsigned Opcode, Type *Ty, TTI::TargetCostKind CostKind,
       TTI::OperandValueKind Op1Info = TTI::OK_AnyValue,
       TTI::OperandValueKind Op2Info = TTI::OK_AnyValue,
       TTI::OperandValueProperties Opd1PropInfo = TTI::OP_None,
@@ -251,8 +262,7 @@ public:
 
   InstructionCost getInterleavedMemoryOpCost(
       unsigned Opcode, Type *VecTy, unsigned Factor, ArrayRef<unsigned> Indices,
-      Align Alignment, unsigned AddressSpace,
-      TTI::TargetCostKind CostKind = TTI::TCK_SizeAndLatency,
+      Align Alignment, unsigned AddressSpace, TTI::TargetCostKind CostKind,
       bool UseMaskForCond = false, bool UseMaskForGaps = false);
 
   InstructionCost getGatherScatterOpCost(unsigned Opcode, Type *DataTy,

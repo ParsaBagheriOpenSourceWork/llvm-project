@@ -162,9 +162,6 @@ class GdbRemoteTestCaseBase(Base):
         self._verbose_log_handler = None
         TestBase.tearDown(self)
 
-    def build(self, *args, **kwargs):
-        self.buildDefault(*args, **kwargs)
-
     def getLocalServerLogFile(self):
         return self.getLogBasenameForCurrentTest() + "-server.log"
 
@@ -794,7 +791,7 @@ class GdbRemoteTestCaseBase(Base):
 
             if time.time() > timeout_time:
                 raise Exception(
-                    'timed out after {} seconds while waiting for theads: waiting for at least {} threads, found {}'.format(
+                    'timed out after {} seconds while waiting for threads: waiting for at least {} threads, found {}'.format(
                         self.DEFAULT_TIMEOUT, thread_count, actual_thread_count))
 
         return threads
@@ -854,6 +851,7 @@ class GdbRemoteTestCaseBase(Base):
         "qXfer:libraries:read",
         "qXfer:libraries-svr4:read",
         "qXfer:features:read",
+        "qXfer:siginfo:read",
         "qEcho",
         "QPassSignals",
         "multiprocess",
@@ -861,6 +859,7 @@ class GdbRemoteTestCaseBase(Base):
         "vfork-events",
         "memory-tagging",
         "qSaveCore",
+        "native-signals",
     ]
 
     def parse_qSupported_response(self, context):
@@ -1538,17 +1537,18 @@ class GdbRemoteTestCaseBase(Base):
         # variable value
         if re.match("s390x", arch):
             expected_step_count = 2
-        # ARM64 requires "4" instructions: 2 to compute the address (adrp, add),
-        # one to materialize the constant (mov) and the store
+        # ARM64 requires "4" instructions: 2 to compute the address (adrp,
+        # add), one to materialize the constant (mov) and the store. Once
+        # addresses and constants are materialized, only one instruction is
+        # needed.
         if re.match("arm64", arch):
-            expected_step_count = 4
-
-        self.assertEqual(step_count, expected_step_count)
-
-        # ARM64: Once addresses and constants are materialized, only one
-        # instruction is needed.
-        if re.match("arm64", arch):
-            expected_step_count = 1
+            before_materialization_step_count = 4
+            after_matrialization_step_count = 1
+            self.assertIn(step_count, [before_materialization_step_count,
+                                       after_matrialization_step_count])
+            expected_step_count = after_matrialization_step_count
+        else:
+            self.assertEqual(step_count, expected_step_count)
 
         # Verify we hit the next state.
         args["expected_g_c1"] = "0"
