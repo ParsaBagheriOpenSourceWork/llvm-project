@@ -36,7 +36,7 @@ struct testbuf
 
 int main(int, char**)
 {
-    // sanity check
+    // check pbackfail
     {
         testbuf<char> tb("");
         tb.pbackfail();
@@ -68,6 +68,7 @@ int main(int, char**)
         assert(sb.pbackfail(std::char_traits<char>::eof()) == std::char_traits<char>::eof());
         assert(sb.str() == "133");
     }
+#ifndef TEST_HAS_NO_WIDE_CHARACTERS
     {
         testbuf<wchar_t> sb(L"123", std::ios_base::in);
         assert(sb.sgetc() == L'1');
@@ -95,6 +96,7 @@ int main(int, char**)
         assert(sb.pbackfail(std::char_traits<wchar_t>::eof()) == std::char_traits<wchar_t>::eof());
         assert(sb.str() == L"133");
     }
+#endif
 
   return 0;
 }

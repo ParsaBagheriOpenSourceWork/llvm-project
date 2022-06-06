@@ -82,6 +82,10 @@ static const Expr *peelOffPointerArithmetic(const BinaryOperator *B) {
   return nullptr;
 }
 
+/// \return A subexpression of @c Ex which represents the
+/// expression-of-interest.
+static const Expr *peelOffOuterExpr(const Expr *Ex, const ExplodedNode *N);
+
 /// Given that expression S represents a pointer that would be dereferenced,
 /// try to find a sub-expression from which the pointer came from.
 /// This is used for tracking down origins of a null or undefined value:
@@ -815,7 +819,7 @@ bool NoStoreFuncVisitor::prettyPrintRegionName(const RegionVector &FieldChain,
 
     // Just keep going up to the base region.
     // Element regions may appear due to casts.
-    if (isa<CXXBaseObjectRegion>(R) || isa<CXXTempObjectRegion>(R))
+    if (isa<CXXBaseObjectRegion, CXXTempObjectRegion>(R))
       continue;
 
     if (Sep.empty())
@@ -1670,9 +1674,10 @@ PathDiagnosticPieceRef TrackConstraintBRVisitor::VisitNode(
   if (isUnderconstrained(PrevN)) {
     IsSatisfied = true;
 
-    // As a sanity check, make sure that the negation of the constraint
-    // was infeasible in the current state.  If it is feasible, we somehow
-    // missed the transition point.
+    // At this point, the negation of the constraint should be infeasible. If it
+    // is feasible, make sure that the negation of the constrainti was
+    // infeasible in the current state.  If it is feasible, we somehow missed
+    // the transition point.
     assert(!isUnderconstrained(N));
 
     // We found the transition point for the constraint.  We now need to
@@ -1690,6 +1695,13 @@ PathDiagnosticPieceRef TrackConstraintBRVisitor::VisitNode(
 
     // Construct a new PathDiagnosticPiece.
     ProgramPoint P = N->getLocation();
+
+    // If this node already have a specialized note, it's probably better
+    // than our generic note.
+    // FIXME: This only looks for note tags, not for other ways to add a note.
+    if (isa_and_nonnull<NoteTag>(P.getTag()))
+      return nullptr;
+
     PathDiagnosticLocation L =
       PathDiagnosticLocation::create(P, BRC.getSourceManager());
     if (!L.isValid())
@@ -1918,11 +1930,33 @@ TrackControlDependencyCondBRVisitor::VisitNode(const ExplodedNode *N,
       return nullptr;
 
     if (const Expr *Condition = NB->getLastCondition()) {
+
+      // If we can't retrieve a sensible condition, just bail out.
+      const Expr *InnerExpr = peelOffOuterExpr(Condition, N);
+      if (!InnerExpr)
+        return nullptr;
+
+      // If the condition was a function call, we likely won't gain much from
+      // tracking it either. Evidence suggests that it will mostly trigger in
+      // scenarios like this:
+      //
+      //   void f(int *x) {
+      //     x = nullptr;
+      //     if (alwaysTrue()) // We don't need a whole lot of explanation
+      //                       // here, the function name is good enough.
+      //       *x = 5;
+      //   }
+      //
+      // Its easy to create a counterexample where this heuristic would make us
+      // lose valuable information, but we've never really seen one in practice.
+      if (isa<CallExpr>(InnerExpr))
+        return nullptr;
+
       // Keeping track of the already tracked conditions on a visitor level
       // isn't sufficient, because a new visitor is created for each tracked
       // expression, hence the BugReport level set.
       if (BR.addTrackedCondition(N)) {
-        getParentTracker().track(Condition, N,
+        getParentTracker().track(InnerExpr, N,
                                  {bugreporter::TrackingKind::Condition,
                                   /*EnableNullFPSuppression=*/false});
         return constructDebugPieceForTrackedCondition(Condition, N, BRC);
@@ -1937,10 +1971,8 @@ TrackControlDependencyCondBRVisitor::VisitNode(const ExplodedNode *N,
 // Implementation of trackExpressionValue.
 //===----------------------------------------------------------------------===//
 
-/// \return A subexpression of @c Ex which represents the
-/// expression-of-interest.
-static const Expr *peelOffOuterExpr(const Expr *Ex,
-                                    const ExplodedNode *N) {
+static const Expr *peelOffOuterExpr(const Expr *Ex, const ExplodedNode *N) {
+
   Ex = Ex->IgnoreParenCasts();
   if (const auto *FE = dyn_cast<FullExpr>(Ex))
     return peelOffOuterExpr(FE->getSubExpr(), N);
@@ -2735,9 +2767,8 @@ bool ConditionBRVisitor::patternMatch(const Expr *Ex,
   const Expr *OriginalExpr = Ex;
   Ex = Ex->IgnoreParenCasts();
 
-  if (isa<GNUNullExpr>(Ex) || isa<ObjCBoolLiteralExpr>(Ex) ||
-      isa<CXXBoolLiteralExpr>(Ex) || isa<IntegerLiteral>(Ex) ||
-      isa<FloatingLiteral>(Ex)) {
+  if (isa<GNUNullExpr, ObjCBoolLiteralExpr, CXXBoolLiteralExpr, IntegerLiteral,
+          FloatingLiteral>(Ex)) {
     // Use heuristics to determine if the expression is a macro
     // expanding to a literal and if so, use the macro's name.
     SourceLocation BeginLoc = OriginalExpr->getBeginLoc();
@@ -2804,7 +2835,8 @@ bool ConditionBRVisitor::patternMatch(const Expr *Ex,
       Out << '\''
           << Lexer::getSourceText(
                  CharSourceRange::getTokenRange(Ex->getSourceRange()),
-                 BRC.getSourceManager(), BRC.getASTContext().getLangOpts(), 0)
+                 BRC.getSourceManager(), BRC.getASTContext().getLangOpts(),
+                 nullptr)
           << '\'';
   }
 

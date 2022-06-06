@@ -30,7 +30,6 @@
 #include "llvm/ADT/None.h"
 #include "llvm/ADT/Optional.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/Support/Base64.h"
 #include "llvm/Support/Casting.h"
 #include <algorithm>
 
@@ -314,21 +313,26 @@ unsigned evaluateHighlightPriority(const HighlightingToken &Tok) {
 //
 // In particular, heuristically resolved dependent names get their heuristic
 // kind, plus the dependent modifier.
+llvm::Optional<HighlightingToken> resolveConflict(const HighlightingToken &A,
+                                                  const HighlightingToken &B) {
+  unsigned Priority1 = evaluateHighlightPriority(A);
+  unsigned Priority2 = evaluateHighlightPriority(B);
+  if (Priority1 == Priority2 && A.Kind != B.Kind)
+    return llvm::None;
+  auto Result = Priority1 > Priority2 ? A : B;
+  Result.Modifiers = A.Modifiers | B.Modifiers;
+  return Result;
+}
 llvm::Optional<HighlightingToken>
 resolveConflict(ArrayRef<HighlightingToken> Tokens) {
   if (Tokens.size() == 1)
     return Tokens[0];
 
-  if (Tokens.size() != 2)
-    return llvm::None;
-
-  unsigned Priority1 = evaluateHighlightPriority(Tokens[0]);
-  unsigned Priority2 = evaluateHighlightPriority(Tokens[1]);
-  if (Priority1 == Priority2 && Tokens[0].Kind != Tokens[1].Kind)
-    return llvm::None;
-  auto Result = Priority1 > Priority2 ? Tokens[0] : Tokens[1];
-  Result.Modifiers = Tokens[0].Modifiers | Tokens[1].Modifiers;
-  return Result;
+  assert(Tokens.size() >= 2);
+  Optional<HighlightingToken> Winner = resolveConflict(Tokens[0], Tokens[1]);
+  for (size_t I = 2; Winner && I < Tokens.size(); ++I)
+    Winner = resolveConflict(*Winner, Tokens[I]);
+  return Winner;
 }
 
 /// Consumes source locations and maps them to text ranges for highlightings.
@@ -468,7 +472,7 @@ private:
   const LangOptions &LangOpts;
   std::vector<HighlightingToken> Tokens;
   std::map<Range, llvm::SmallVector<HighlightingModifier, 1>> ExtraModifiers;
-  const HeuristicResolver *Resolver;
+  const HeuristicResolver *Resolver = nullptr;
   // returned from addToken(InvalidLoc)
   HighlightingToken InvalidHighlightingToken;
 };
@@ -601,16 +605,24 @@ public:
     auto *AT = D->getType()->getContainedAutoType();
     if (!AT)
       return true;
-    if (auto K = kindForType(AT->getDeducedType().getTypePtrOrNull(),
-                             H.getResolver())) {
-      auto &Tok = H.addToken(D->getTypeSpecStartLoc(), *K)
-                      .addModifier(HighlightingModifier::Deduced);
-      const Type *Deduced = AT->getDeducedType().getTypePtrOrNull();
-      if (auto Mod = scopeModifier(Deduced))
-        Tok.addModifier(*Mod);
-      if (isDefaultLibrary(Deduced))
-        Tok.addModifier(HighlightingModifier::DefaultLibrary);
-    }
+    auto K =
+        kindForType(AT->getDeducedType().getTypePtrOrNull(), H.getResolver());
+    if (!K)
+      return true;
+    SourceLocation StartLoc = D->getTypeSpecStartLoc();
+    // The AutoType may not have a corresponding token, e.g. in the case of
+    // init-captures. In this case, StartLoc overlaps with the location
+    // of the decl itself, and producing a token for the type here would result
+    // in both it and the token for the decl being dropped due to conflict.
+    if (StartLoc == D->getLocation())
+      return true;
+    auto &Tok =
+        H.addToken(StartLoc, *K).addModifier(HighlightingModifier::Deduced);
+    const Type *Deduced = AT->getDeducedType().getTypePtrOrNull();
+    if (auto Mod = scopeModifier(Deduced))
+      Tok.addModifier(*Mod);
+    if (isDefaultLibrary(Deduced))
+      Tok.addModifier(HighlightingModifier::DefaultLibrary);
     return true;
   }
 
@@ -750,6 +762,7 @@ public:
     case TemplateName::QualifiedTemplate:
     case TemplateName::SubstTemplateTemplateParm:
     case TemplateName::SubstTemplateTemplateParmPack:
+    case TemplateName::UsingTemplate:
       // Names that could be resolved to a TemplateDecl are handled elsewhere.
       break;
     }
@@ -900,7 +913,7 @@ bool operator==(const HighlightingToken &L, const HighlightingToken &R) {
          std::tie(R.R, R.Kind, R.Modifiers);
 }
 bool operator<(const HighlightingToken &L, const HighlightingToken &R) {
-  return std::tie(L.R, L.Kind, R.Modifiers) <
+  return std::tie(L.R, L.Kind, L.Modifiers) <
          std::tie(R.R, R.Kind, R.Modifiers);
 }
 

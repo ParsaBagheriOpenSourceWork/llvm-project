@@ -77,13 +77,9 @@ namespace ento {
 
 class AnalysisManager;
 class BasicValueFactory;
-class BlockCounter;
-class BranchNodeBuilder;
 class CallEvent;
 class CheckerManager;
 class ConstraintManager;
-class CXXTempObjectRegion;
-class EndOfFunctionNodeBuilder;
 class ExplodedNodeSet;
 class ExplodedNode;
 class IndirectGotoNodeBuilder;
@@ -139,6 +135,7 @@ public:
 
 private:
   cross_tu::CrossTranslationUnitContext &CTU;
+  bool IsCTUEnabled;
 
   AnalysisManager &AMgr;
 
@@ -809,8 +806,14 @@ private:
                         const ExplodedNode *Pred,
                         const EvalCallOptions &CallOpts = {});
 
-  bool inlineCall(const CallEvent &Call, const Decl *D, NodeBuilder &Bldr,
-                  ExplodedNode *Pred, ProgramStateRef State);
+  void inlineCall(WorkList *WList, const CallEvent &Call, const Decl *D,
+                  NodeBuilder &Bldr, ExplodedNode *Pred, ProgramStateRef State);
+
+  void ctuBifurcate(const CallEvent &Call, const Decl *D, NodeBuilder &Bldr,
+                    ExplodedNode *Pred, ProgramStateRef State);
+
+  /// Returns true if the CTU analysis is running its second phase.
+  bool isSecondPhaseCTU() { return IsCTUEnabled && !Engine.getCTUWorkList(); }
 
   /// Conservatively evaluate call by invalidating regions and binding
   /// a conjured return value.

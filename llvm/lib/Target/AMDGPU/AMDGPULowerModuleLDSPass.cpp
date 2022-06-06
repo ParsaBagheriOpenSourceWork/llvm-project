@@ -14,7 +14,7 @@
 // known address. AMDGPUMachineFunction allocates the LDS global.
 //
 // Local variables with constant annotation or non-undef initializer are passed
-// through unchanged for simplication or error diagnostics in later passes.
+// through unchanged for simplification or error diagnostics in later passes.
 //
 // To reduce the memory overhead variables that are only used by kernels are
 // excluded from this transform. The analysis to determine whether a variable
@@ -24,19 +24,13 @@
 // A possible future refinement is to specialise the structure per-kernel, so
 // that fields can be elided based on more expensive analysis.
 //
-// NOTE: Since this pass will directly pack LDS (assume large LDS) into a struct
-// type which would cause allocating huge memory for struct instance within
-// every kernel. Hence, before running this pass, it is advisable to run the
-// pass "amdgpu-replace-lds-use-with-pointer" which will replace LDS uses within
-// non-kernel functions by pointers and thereby minimizes the unnecessary per
-// kernel allocation of LDS memory.
-//
 //===----------------------------------------------------------------------===//
 
 #include "AMDGPU.h"
 #include "Utils/AMDGPUBaseInfo.h"
-#include "Utils/AMDGPULDSUtils.h"
+#include "Utils/AMDGPUMemoryUtils.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/Analysis/CallGraph.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/IRBuilder.h"
@@ -61,6 +55,20 @@ static cl::opt<bool> SuperAlignLDSGlobals(
     cl::init(true), cl::Hidden);
 
 namespace {
+
+SmallPtrSet<GlobalValue *, 32> getUsedList(Module &M) {
+  SmallPtrSet<GlobalValue *, 32> UsedList;
+
+  SmallVector<GlobalValue *, 32> TmpVec;
+  collectUsedGlobalVariables(M, TmpVec, true);
+  UsedList.insert(TmpVec.begin(), TmpVec.end());
+
+  TmpVec.clear();
+  collectUsedGlobalVariables(M, TmpVec, false);
+  UsedList.insert(TmpVec.begin(), TmpVec.end());
+
+  return UsedList;
+}
 
 class AMDGPULowerModuleLDS : public ModulePass {
 
@@ -105,11 +113,9 @@ class AMDGPULowerModuleLDS : public ModulePass {
   removeFromUsedLists(Module &M,
                       const std::vector<GlobalVariable *> &LocalVars) {
     SmallPtrSet<Constant *, 32> LocalVarsSet;
-    for (size_t I = 0; I < LocalVars.size(); I++) {
-      if (Constant *C = dyn_cast<Constant>(LocalVars[I]->stripPointerCasts())) {
+    for (GlobalVariable *LocalVar : LocalVars)
+      if (Constant *C = dyn_cast<Constant>(LocalVar->stripPointerCasts()))
         LocalVarsSet.insert(C);
-      }
-    }
     removeFromUsedList(M, "llvm.used", LocalVarsSet);
     removeFromUsedList(M, "llvm.compiler.used", LocalVarsSet);
   }
@@ -158,9 +164,10 @@ public:
   }
 
   bool runOnModule(Module &M) override {
-    UsedList = AMDGPU::getUsedList(M);
-
-    bool Changed = processUsedLDS(M);
+    CallGraph CG = CallGraph(M);
+    UsedList = getUsedList(M);
+    bool Changed = superAlignLDSGlobals(M);
+    Changed |= processUsedLDS(CG, M);
 
     for (Function &F : M.functions()) {
       if (F.isDeclaration())
@@ -169,7 +176,7 @@ public:
       // Only lower compute kernels' LDS.
       if (!AMDGPU::isKernel(F.getCallingConv()))
         continue;
-      Changed |= processUsedLDS(M, &F);
+      Changed |= processUsedLDS(CG, M, &F);
     }
 
     UsedList.clear();
@@ -177,7 +184,51 @@ public:
   }
 
 private:
-  bool processUsedLDS(Module &M, Function *F = nullptr) {
+  // Increase the alignment of LDS globals if necessary to maximise the chance
+  // that we can use aligned LDS instructions to access them.
+  static bool superAlignLDSGlobals(Module &M) {
+    const DataLayout &DL = M.getDataLayout();
+    bool Changed = false;
+    if (!SuperAlignLDSGlobals) {
+      return Changed;
+    }
+
+    for (auto &GV : M.globals()) {
+      if (GV.getType()->getPointerAddressSpace() != AMDGPUAS::LOCAL_ADDRESS) {
+        // Only changing alignment of LDS variables
+        continue;
+      }
+      if (!GV.hasInitializer()) {
+        // cuda/hip extern __shared__ variable, leave alignment alone
+        continue;
+      }
+
+      Align Alignment = AMDGPU::getAlign(DL, &GV);
+      TypeSize GVSize = DL.getTypeAllocSize(GV.getValueType());
+
+      if (GVSize > 8) {
+        // We might want to use a b96 or b128 load/store
+        Alignment = std::max(Alignment, Align(16));
+      } else if (GVSize > 4) {
+        // We might want to use a b64 load/store
+        Alignment = std::max(Alignment, Align(8));
+      } else if (GVSize > 2) {
+        // We might want to use a b32 load/store
+        Alignment = std::max(Alignment, Align(4));
+      } else if (GVSize > 1) {
+        // We might want to use a b16 load/store
+        Alignment = std::max(Alignment, Align(2));
+      }
+
+      if (Alignment != AMDGPU::getAlign(DL, &GV)) {
+        Changed = true;
+        GV.setAlignment(Alignment);
+      }
+    }
+    return Changed;
+  }
+
+  bool processUsedLDS(CallGraph const &CG, Module &M, Function *F = nullptr) {
     LLVMContext &Ctx = M.getContext();
     const DataLayout &DL = M.getDataLayout();
 
@@ -188,31 +239,6 @@ private:
     if (FoundLocalVars.empty()) {
       // No variables to rewrite, no changes made.
       return false;
-    }
-
-    // Increase the alignment of LDS globals if necessary to maximise the chance
-    // that we can use aligned LDS instructions to access them.
-    if (SuperAlignLDSGlobals) {
-      for (auto *GV : FoundLocalVars) {
-        Align Alignment = AMDGPU::getAlign(DL, GV);
-        TypeSize GVSize = DL.getTypeAllocSize(GV->getValueType());
-
-        if (GVSize > 8) {
-          // We might want to use a b96 or b128 load/store
-          Alignment = std::max(Alignment, Align(16));
-        } else if (GVSize > 4) {
-          // We might want to use a b64 load/store
-          Alignment = std::max(Alignment, Align(8));
-        } else if (GVSize > 2) {
-          // We might want to use a b32 load/store
-          Alignment = std::max(Alignment, Align(4));
-        } else if (GVSize > 1) {
-          // We might want to use a b16 load/store
-          Alignment = std::max(Alignment, Align(2));
-        }
-
-        GV->setAlignment(Alignment);
-      }
     }
 
     SmallVector<OptimizedStructLayoutField, 8> LayoutFields;
@@ -343,20 +369,27 @@ private:
       refineUsesAlignmentAndAA(GEP, A, DL, AliasScope, NoAlias);
     }
 
-    // Mark kernels with asm that reads the address of the allocated structure
-    // This is not necessary for lowering. This lets other passes, specifically
-    // PromoteAlloca, accurately calculate how much LDS will be used by the
-    // kernel after lowering.
+    // This ensures the variable is allocated when called functions access it.
+    // It also lets other passes, specifically PromoteAlloca, accurately
+    // calculate how much LDS will be used by the kernel after lowering.
     if (!F) {
       IRBuilder<> Builder(Ctx);
-      SmallPtrSet<Function *, 32> Kernels;
       for (Function &Func : M.functions()) {
-        if (Func.isDeclaration())
-          continue;
+        if (!Func.isDeclaration() && AMDGPU::isKernelCC(&Func)) {
+          const CallGraphNode *N = CG[&Func];
+          const bool CalleesRequireModuleLDS = N->size() > 0;
 
-        if (AMDGPU::isKernelCC(&Func) && !Kernels.contains(&Func)) {
-          markUsedByKernel(Builder, &Func, SGV);
-          Kernels.insert(&Func);
+          if (CalleesRequireModuleLDS) {
+            // If a function this kernel might call requires module LDS,
+            // annotate the kernel to let later passes know it will allocate
+            // this structure, even if not apparent from the IR.
+            markUsedByKernel(Builder, &Func, SGV);
+          } else {
+            // However if we are certain this kernel cannot call a function that
+            // requires module LDS, annotate the kernel so the backend can elide
+            // the allocation without repeating callgraph walks.
+            Func.addFnAttr("amdgpu-elide-module-lds");
+          }
         }
       }
     }

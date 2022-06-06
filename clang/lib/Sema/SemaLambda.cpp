@@ -238,21 +238,19 @@ getGenericLambdaTemplateParameterList(LambdaScopeInfo *LSI, Sema &SemaRef) {
   return LSI->GLTemplateParameterList;
 }
 
-CXXRecordDecl *Sema::createLambdaClosureType(SourceRange IntroducerRange,
-                                             TypeSourceInfo *Info,
-                                             bool KnownDependent,
-                                             LambdaCaptureDefault CaptureDefault) {
+CXXRecordDecl *
+Sema::createLambdaClosureType(SourceRange IntroducerRange, TypeSourceInfo *Info,
+                              unsigned LambdaDependencyKind,
+                              LambdaCaptureDefault CaptureDefault) {
   DeclContext *DC = CurContext;
   while (!(DC->isFunctionOrMethod() || DC->isRecord() || DC->isFileContext()))
     DC = DC->getParent();
   bool IsGenericLambda = getGenericLambdaTemplateParameterList(getCurLambda(),
                                                                *this);
   // Start constructing the lambda class.
-  CXXRecordDecl *Class = CXXRecordDecl::CreateLambda(Context, DC, Info,
-                                                     IntroducerRange.getBegin(),
-                                                     KnownDependent,
-                                                     IsGenericLambda,
-                                                     CaptureDefault);
+  CXXRecordDecl *Class = CXXRecordDecl::CreateLambda(
+      Context, DC, Info, IntroducerRange.getBegin(), LambdaDependencyKind,
+      IsGenericLambda, CaptureDefault);
   DC->addDecl(Class);
 
   return Class;
@@ -373,7 +371,7 @@ CXXMethodDecl *Sema::startLambdaDefinition(CXXRecordDecl *Class,
     const FunctionProtoType *FPT = MethodType->castAs<FunctionProtoType>();
     QualType Result = FPT->getReturnType();
     if (Result->isUndeducedType()) {
-      Result = SubstAutoType(Result, Context.DependentTy);
+      Result = SubstAutoTypeDependent(Result);
       MethodType = Context.getFunctionType(Result, FPT->getParamTypes(),
                                            FPT->getExtProtoInfo());
     }
@@ -898,17 +896,18 @@ void Sema::ActOnStartOfLambdaDefinition(LambdaIntroducer &Intro,
 
   // Determine if we're within a context where we know that the lambda will
   // be dependent, because there are template parameters in scope.
-  bool KnownDependent;
+  CXXRecordDecl::LambdaDependencyKind LambdaDependencyKind =
+      CXXRecordDecl::LDK_Unknown;
   if (LSI->NumExplicitTemplateParams > 0) {
     auto *TemplateParamScope = CurScope->getTemplateParamParent();
     assert(TemplateParamScope &&
            "Lambda with explicit template param list should establish a "
            "template param scope");
     assert(TemplateParamScope->getParent());
-    KnownDependent = TemplateParamScope->getParent()
-                                       ->getTemplateParamParent() != nullptr;
-  } else {
-    KnownDependent = CurScope->getTemplateParamParent() != nullptr;
+    if (TemplateParamScope->getParent()->getTemplateParamParent() != nullptr)
+      LambdaDependencyKind = CXXRecordDecl::LDK_AlwaysDependent;
+  } else if (CurScope->getTemplateParamParent() != nullptr) {
+    LambdaDependencyKind = CXXRecordDecl::LDK_AlwaysDependent;
   }
 
   // Determine the signature of the call operator.
@@ -977,8 +976,8 @@ void Sema::ActOnStartOfLambdaDefinition(LambdaIntroducer &Intro,
                                       UPPC_DeclarationType);
   }
 
-  CXXRecordDecl *Class = createLambdaClosureType(Intro.Range, MethodTyInfo,
-                                                 KnownDependent, Intro.Default);
+  CXXRecordDecl *Class = createLambdaClosureType(
+      Intro.Range, MethodTyInfo, LambdaDependencyKind, Intro.Default);
   CXXMethodDecl *Method =
       startLambdaDefinition(Class, Intro.Range, MethodTyInfo, EndLoc, Params,
                             ParamInfo.getDeclSpec().getConstexprSpecifier(),
@@ -1245,7 +1244,7 @@ void Sema::ActOnStartOfLambdaDefinition(LambdaIntroducer &Intro,
   // cleanups from the enclosing full-expression.
   PushExpressionEvaluationContext(
       LSI->CallOperator->isConsteval()
-          ? ExpressionEvaluationContext::ConstantEvaluated
+          ? ExpressionEvaluationContext::ImmediateFunctionContext
           : ExpressionEvaluationContext::PotentiallyEvaluated);
 }
 
@@ -1948,6 +1947,7 @@ ExprResult Sema::BuildLambdaExpr(SourceLocation StartLoc, SourceLocation EndLoc,
     // ratified, it lays out the exact set of conditions where we shouldn't
     // allow a lambda-expression.
     case ExpressionEvaluationContext::ConstantEvaluated:
+    case ExpressionEvaluationContext::ImmediateFunctionContext:
       // We don't actually diagnose this case immediately, because we
       // could be within a context where we might find out later that
       // the expression is potentially evaluated (e.g., for typeid).

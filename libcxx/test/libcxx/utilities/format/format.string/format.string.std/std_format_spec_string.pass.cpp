@@ -6,7 +6,6 @@
 //===----------------------------------------------------------------------===//
 
 // UNSUPPORTED: c++03, c++11, c++14, c++17
-// UNSUPPORTED: libcpp-no-concepts
 // UNSUPPORTED: libcpp-has-no-incomplete-format
 
 // <format>
@@ -163,19 +162,14 @@ constexpr void test() {
 
   test_exception<Parser<CharT>>("End of input while parsing format-spec arg-id",
                                 CSTR("{"));
-  test_exception<Parser<CharT>>(
-      "A format-spec arg-id should terminate at a '}'", CSTR("{0"));
+  test_exception<Parser<CharT>>("Invalid arg-id", CSTR("{0"));
   test_exception<Parser<CharT>>(
       "The arg-id of the format-spec starts with an invalid character",
       CSTR("{a"));
-  test_exception<Parser<CharT>>(
-      "A format-spec arg-id should terminate at a '}'", CSTR("{1"));
-  test_exception<Parser<CharT>>(
-      "A format-spec arg-id should terminate at a '}'", CSTR("{9"));
-  test_exception<Parser<CharT>>(
-      "A format-spec arg-id should terminate at a '}'", CSTR("{9:"));
-  test_exception<Parser<CharT>>(
-      "A format-spec arg-id should terminate at a '}'", CSTR("{9a"));
+  test_exception<Parser<CharT>>("Invalid arg-id", CSTR("{1"));
+  test_exception<Parser<CharT>>("Invalid arg-id", CSTR("{9"));
+  test_exception<Parser<CharT>>("Invalid arg-id", CSTR("{9:"));
+  test_exception<Parser<CharT>>("Invalid arg-id", CSTR("{9a"));
 
   static_assert(std::__format::__number_max == 2'147'483'647,
                 "Update the assert and the test.");
@@ -205,12 +199,6 @@ constexpr void test() {
   test({.precision = 1, .precision_as_arg = true}, 4, CSTR(".{1}}"));
 
   test_exception<Parser<CharT>>(
-      "A format-spec precision field shouldn't have a leading zero",
-      CSTR(".00"));
-  test_exception<Parser<CharT>>(
-      "A format-spec precision field shouldn't have a leading zero",
-      CSTR(".01"));
-  test_exception<Parser<CharT>>(
       "The format-spec precision field doesn't contain a value or arg-id",
       CSTR(".a"));
   test_exception<Parser<CharT>>(
@@ -231,19 +219,14 @@ constexpr void test() {
 
   test_exception<Parser<CharT>>("End of input while parsing format-spec arg-id",
                                 CSTR(".{"));
-  test_exception<Parser<CharT>>(
-      "A format-spec arg-id should terminate at a '}'", CSTR(".{0"));
+  test_exception<Parser<CharT>>("Invalid arg-id", CSTR(".{0"));
   test_exception<Parser<CharT>>(
       "The arg-id of the format-spec starts with an invalid character",
       CSTR(".{a"));
-  test_exception<Parser<CharT>>(
-      "A format-spec arg-id should terminate at a '}'", CSTR(".{1"));
-  test_exception<Parser<CharT>>(
-      "A format-spec arg-id should terminate at a '}'", CSTR(".{9"));
-  test_exception<Parser<CharT>>(
-      "A format-spec arg-id should terminate at a '}'", CSTR(".{9:"));
-  test_exception<Parser<CharT>>(
-      "A format-spec arg-id should terminate at a '}'", CSTR(".{9a"));
+  test_exception<Parser<CharT>>("Invalid arg-id", CSTR(".{1"));
+  test_exception<Parser<CharT>>("Invalid arg-id", CSTR(".{9"));
+  test_exception<Parser<CharT>>("Invalid arg-id", CSTR(".{9:"));
+  test_exception<Parser<CharT>>("Invalid arg-id", CSTR(".{9a"));
 
   static_assert(std::__format::__number_max == 2'147'483'647,
                 "Update the assert and the test.");
@@ -351,11 +334,13 @@ constexpr void test() {
 
 constexpr bool test() {
   test<char>();
+#ifndef TEST_HAS_NO_WIDE_CHARACTERS
   test<wchar_t>();
+#endif
 #ifndef _LIBCPP_HAS_NO_CHAR8_T
   test<char8_t>();
 #endif
-#ifndef _LIBCPP_HAS_NO_UNICODE_CHARS
+#ifndef TEST_HAS_NO_UNICODE_CHARS
   test<char16_t>();
   test<char32_t>();
 #endif
@@ -368,10 +353,12 @@ int main(int, char**) {
   // Make sure the parsers match the expectations. The layout of the
   // subobjects is chosen to minimize the size required.
   LIBCPP_STATIC_ASSERT(sizeof(Parser<char>) == 3 * sizeof(uint32_t));
+#ifndef TEST_HAS_NO_WIDE_CHARACTERS
   LIBCPP_STATIC_ASSERT(
       sizeof(Parser<wchar_t>) ==
       (sizeof(wchar_t) <= 2 ? 3 * sizeof(uint32_t) : 4 * sizeof(uint32_t)));
 #endif
+#endif // _WIN32
 
   test();
   static_assert(test());

@@ -14,7 +14,7 @@
 #ifndef LLVM_CLANG_AST_ASTIMPORTER_H
 #define LLVM_CLANG_AST_ASTIMPORTER_H
 
-#include "clang/AST/APValue.h"
+#include "clang/AST/ASTImportError.h"
 #include "clang/AST/DeclBase.h"
 #include "clang/AST/DeclarationName.h"
 #include "clang/AST/ExprCXX.h"
@@ -29,7 +29,6 @@
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/Optional.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/Support/Error.h"
 #include <utility>
 
 namespace clang {
@@ -48,33 +47,6 @@ class Stmt;
 class TagDecl;
 class TranslationUnitDecl;
 class TypeSourceInfo;
-
-  class ImportError : public llvm::ErrorInfo<ImportError> {
-  public:
-    /// \brief Kind of error when importing an AST component.
-    enum ErrorKind {
-        NameConflict, /// Naming ambiguity (likely ODR violation).
-        UnsupportedConstruct, /// Not supported node or case.
-        Unknown /// Other error.
-    };
-
-    ErrorKind Error;
-
-    static char ID;
-
-    ImportError() : Error(Unknown) {}
-    ImportError(const ImportError &Other) : Error(Other.Error) {}
-    ImportError &operator=(const ImportError &Other) {
-      Error = Other.Error;
-      return *this;
-    }
-    ImportError(ErrorKind Error) : Error(Error) { }
-
-    std::string toString() const;
-
-    void log(raw_ostream &OS) const override;
-    std::error_code convertToErrorCode() const override;
-  };
 
   // \brief Returns with a list of declarations started from the canonical decl
   // then followed by subsequent decls in the translation unit.
@@ -378,6 +350,9 @@ class TypeSourceInfo;
     llvm::Expected<const Decl *> Import(const Decl *FromD) {
       return Import(const_cast<Decl *>(FromD));
     }
+
+    llvm::Expected<InheritedConstructor>
+    Import(const InheritedConstructor &From);
 
     /// Return the copy of the given declaration in the "to" context if
     /// it has already been imported from the "from" context.  Otherwise return

@@ -320,10 +320,8 @@ static void appendCodePoint(unsigned Codepoint,
                             llvm::SmallVectorImpl<char> &Str) {
   char ResultBuf[4];
   char *ResultPtr = ResultBuf;
-  bool Res = llvm::ConvertCodePointToUTF8(Codepoint, ResultPtr);
-  (void)Res;
-  assert(Res && "Unexpected conversion failure");
-  Str.append(ResultBuf, ResultPtr);
+  if (llvm::ConvertCodePointToUTF8(Codepoint, ResultPtr))
+    Str.append(ResultBuf, ResultPtr);
 }
 
 void clang::expandUCNs(SmallVectorImpl<char> &Buf, StringRef Input) {
@@ -693,12 +691,6 @@ NumericLiteralParser::NumericLiteralParser(StringRef TokSpelling,
     : SM(SM), LangOpts(LangOpts), Diags(Diags),
       ThisTokBegin(TokSpelling.begin()), ThisTokEnd(TokSpelling.end()) {
 
-  // This routine assumes that the range begin/end matches the regex for integer
-  // and FP constants (specifically, the 'pp-number' regex), and assumes that
-  // the byte at "*end" is both valid and not part of the regex.  Because of
-  // this, it doesn't have to check for 'overscan' in various places.
-  assert(!isPreprocessingNumberBody(*ThisTokEnd) && "didn't maximally munch?");
-
   s = DigitsBegin = ThisTokBegin;
   saw_exponent = false;
   saw_period = false;
@@ -717,6 +709,17 @@ NumericLiteralParser::NumericLiteralParser(StringRef TokSpelling,
   isFract = false;
   isAccum = false;
   hadError = false;
+  isBitInt = false;
+
+  // This routine assumes that the range begin/end matches the regex for integer
+  // and FP constants (specifically, the 'pp-number' regex), and assumes that
+  // the byte at "*end" is both valid and not part of the regex.  Because of
+  // this, it doesn't have to check for 'overscan' in various places.
+  if (isPreprocessingNumberBody(*ThisTokEnd)) {
+    Diags.Report(TokLoc, diag::err_lexing_numeric);
+    hadError = true;
+    return;
+  }
 
   if (*s == '0') { // parse radix
     ParseNumberStartingWithZero(TokLoc);
@@ -891,6 +894,24 @@ NumericLiteralParser::NumericLiteralParser(StringRef TokSpelling,
       if (isImaginary) break;   // Cannot be repeated.
       isImaginary = true;
       continue;  // Success.
+    case 'w':
+    case 'W':
+      if (isFPConstant)
+        break; // Invalid for floats.
+      if (HasSize)
+        break; // Invalid if we already have a size for the literal.
+
+      // wb and WB are allowed, but a mixture of cases like Wb or wB is not. We
+      // explicitly do not support the suffix in C++ as an extension because a
+      // library-based UDL that resolves to a library type may be more
+      // appropriate there.
+      if (!LangOpts.CPlusPlus && ((s[0] == 'w' && s[1] == 'b') ||
+          (s[0] == 'W' && s[1] == 'B'))) {
+        isBitInt = true;
+        HasSize = true;
+        ++s; // Skip both characters (2nd char skipped on continue).
+        continue; // Success.
+      }
     }
     // If we reached here, there was an error or a ud-suffix.
     break;
@@ -912,6 +933,7 @@ NumericLiteralParser::NumericLiteralParser(StringRef TokSpelling,
         isFloat16 = false;
         isHalf = false;
         isImaginary = false;
+        isBitInt = false;
         MicrosoftInteger = 0;
         saw_fixed_point_suffix = false;
         isFract = false;
@@ -1141,8 +1163,14 @@ void NumericLiteralParser::ParseNumberStartingWithZero(SourceLocation TokLoc) {
   // floating point constant, the radix will change to 10. Octal floating
   // point constants are not permitted (only decimal and hexadecimal).
   radix = 8;
-  DigitsBegin = s;
+  const char *PossibleNewDigitStart = s;
   s = SkipOctalDigits(s);
+  // When the value is 0 followed by a suffix (like 0wb), we want to leave 0
+  // as the start of the digits. So if skipping octal digits does not skip
+  // anything, we leave the digit start where it was.
+  if (s != PossibleNewDigitStart)
+    DigitsBegin = PossibleNewDigitStart;
+
   if (s == ThisTokEnd)
     return; // Done, simple octal number like 01234
 
@@ -1242,7 +1270,7 @@ NumericLiteralParser::GetFloatValue(llvm::APFloat &Result) {
 
   llvm::SmallString<16> Buffer;
   StringRef Str(ThisTokBegin, n);
-  if (Str.find('\'') != StringRef::npos) {
+  if (Str.contains('\'')) {
     Buffer.reserve(n);
     std::remove_copy_if(Str.begin(), Str.end(), std::back_inserter(Buffer),
                         &isDigitSeparator);
@@ -1357,7 +1385,7 @@ bool NumericLiteralParser::GetFixedPointValue(llvm::APInt &StoreVal, unsigned Sc
       Val *= Base;
     }
   } else if (BaseShift < 0) {
-    for (int64_t i = BaseShift; i < 0 && !Val.isNullValue(); ++i)
+    for (int64_t i = BaseShift; i < 0 && !Val.isZero(); ++i)
       Val = Val.udiv(Base);
   }
 
@@ -1432,7 +1460,12 @@ CharLiteralParser::CharLiteralParser(const char *begin, const char *end,
     ++begin;
 
   // Skip over the entry quote.
-  assert(begin[0] == '\'' && "Invalid token lexed");
+  if (begin[0] != '\'') {
+    PP.Diag(Loc, diag::err_lexing_char);
+    HadError = true;
+    return;
+  }
+
   ++begin;
 
   // Remove an optional ud-suffix.
@@ -1654,9 +1687,9 @@ CharLiteralParser::CharLiteralParser(const char *begin, const char *end,
 ///
 StringLiteralParser::
 StringLiteralParser(ArrayRef<Token> StringToks,
-                    Preprocessor &PP, bool Complain)
+                    Preprocessor &PP)
   : SM(PP.getSourceManager()), Features(PP.getLangOpts()),
-    Target(PP.getTargetInfo()), Diags(Complain ? &PP.getDiagnostics() :nullptr),
+    Target(PP.getTargetInfo()), Diags(&PP.getDiagnostics()),
     MaxTokenLength(0), SizeBound(0), CharByteWidth(0), Kind(tok::unknown),
     ResultPtr(ResultBuf.data()), hadError(false), Pascal(false) {
   init(StringToks);

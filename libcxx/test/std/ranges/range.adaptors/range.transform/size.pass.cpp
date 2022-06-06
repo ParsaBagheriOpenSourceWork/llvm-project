@@ -7,7 +7,6 @@
 //===----------------------------------------------------------------------===//
 
 // UNSUPPORTED: c++03, c++11, c++14, c++17
-// UNSUPPORTED: libcpp-no-concepts
 // UNSUPPORTED: libcpp-has-no-incomplete-ranges
 
 // constexpr auto size() requires sized_range<V>
@@ -23,12 +22,12 @@ concept SizeInvocable = requires(T t) { t.size(); };
 
 constexpr bool test() {
   {
-    std::ranges::transform_view transformView(ContiguousView{}, PlusOne{});
+    std::ranges::transform_view transformView(MoveOnlyView{}, PlusOne{});
     assert(transformView.size() == 8);
   }
 
   {
-    const std::ranges::transform_view transformView(ContiguousView{globalBuff, 4}, PlusOne{});
+    const std::ranges::transform_view transformView(MoveOnlyView{globalBuff, 4}, PlusOne{});
     assert(transformView.size() == 4);
   }
 

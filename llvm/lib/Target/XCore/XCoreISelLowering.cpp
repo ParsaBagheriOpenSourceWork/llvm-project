@@ -167,10 +167,8 @@ XCoreTargetLowering::XCoreTargetLowering(const TargetMachine &TM,
     = MaxStoresPerMemcpy = MaxStoresPerMemcpyOptSize = 2;
 
   // We have target-specific dag combine patterns for the following nodes:
-  setTargetDAGCombine(ISD::STORE);
-  setTargetDAGCombine(ISD::ADD);
-  setTargetDAGCombine(ISD::INTRINSIC_VOID);
-  setTargetDAGCombine(ISD::INTRINSIC_W_CHAIN);
+  setTargetDAGCombine(
+      {ISD::STORE, ISD::ADD, ISD::INTRINSIC_VOID, ISD::INTRINSIC_W_CHAIN});
 
   setMinFunctionAlignment(Align(2));
   setPrefFunctionAlignment(Align(4));
@@ -1315,7 +1313,7 @@ SDValue XCoreTargetLowering::LowerCCCArguments(
         CFRegNode.push_back(ArgIn.getValue(ArgIn->getNumValues() - 1));
       }
     } else {
-      // sanity check
+      // Only arguments passed on the stack should make it here. 
       assert(VA.isMemLoc());
       // Load the argument to a virtual register
       unsigned ObjSize = VA.getLocVT().getSizeInBits()/8;

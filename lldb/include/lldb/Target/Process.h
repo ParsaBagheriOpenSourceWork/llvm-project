@@ -106,23 +106,18 @@ protected:
   std::unique_ptr<ProcessExperimentalProperties> m_experimental_properties_up;
 };
 
-typedef std::shared_ptr<ProcessProperties> ProcessPropertiesSP;
-
 // ProcessAttachInfo
 //
 // Describes any information that is required to attach to a process.
 
 class ProcessAttachInfo : public ProcessInstanceInfo {
 public:
-  ProcessAttachInfo()
-      : ProcessInstanceInfo(), m_listener_sp(), m_hijack_listener_sp(),
-        m_plugin_name() {}
+  ProcessAttachInfo() {}
 
   ProcessAttachInfo(const ProcessLaunchInfo &launch_info)
-      : ProcessInstanceInfo(), m_listener_sp(), m_hijack_listener_sp(),
-        m_plugin_name(), m_resume_count(0), m_wait_for_launch(false),
-        m_ignore_existing(true), m_continue_once_attached(false),
-        m_detach_on_error(true), m_async(false) {
+      : m_resume_count(0), m_wait_for_launch(false), m_ignore_existing(true),
+        m_continue_once_attached(false), m_detach_on_error(true),
+        m_async(false) {
     ProcessInfo::operator=(launch_info);
     SetProcessPluginName(launch_info.GetProcessPluginName());
     SetResumeCount(launch_info.GetResumeCount());
@@ -240,10 +235,11 @@ public:
 
   ~ProcessModID() = default;
 
-  void BumpStopID() {
-    m_stop_id++;
+  uint32_t BumpStopID() {
+    const uint32_t prev_stop_id = m_stop_id++;
     if (!IsLastResumeForUserExpression())
       m_last_natural_stop_id++;
+    return prev_stop_id;
   }
 
   void BumpMemoryID() { m_memory_id++; }
@@ -368,9 +364,6 @@ public:
     eBroadcastInternalStateControlPause = (1 << 1),
     eBroadcastInternalStateControlResume = (1 << 2)
   };
-
-  /// Process warning types.
-  enum Warnings { eWarningsOptimization = 1, eWarningsUnsupportedLanguage = 2 };
 
   typedef Range<lldb::addr_t, lldb::addr_t> LoadRange;
   // We use a read/write lock to allow on or more clients to access the process
@@ -501,7 +494,7 @@ public:
 
   static void SettingsTerminate();
 
-  static const ProcessPropertiesSP &GetGlobalProperties();
+  static ProcessProperties &GetGlobalProperties();
 
   /// Find a Process plug-in that can debug \a module using the currently
   /// selected architecture.
@@ -612,9 +605,8 @@ public:
 
   virtual Status DoLoadCore() {
     Status error;
-    error.SetErrorStringWithFormat(
-        "error: %s does not support loading core files.",
-        GetPluginName().GetCString());
+    error.SetErrorStringWithFormatv(
+        "error: {0} does not support loading core files.", GetPluginName());
     return error;
   }
 
@@ -701,6 +693,9 @@ protected:
   virtual JITLoaderList &GetJITLoaders();
 
 public:
+  /// Get the system architecture for this process.
+  virtual ArchSpec GetSystemArchitecture() { return {}; }
+
   /// Get the system runtime plug-in for this process.
   ///
   /// \return
@@ -943,9 +938,9 @@ public:
   virtual Status DoAttachToProcessWithID(lldb::pid_t pid,
                                          const ProcessAttachInfo &attach_info) {
     Status error;
-    error.SetErrorStringWithFormat(
-        "error: %s does not support attaching to a process by pid",
-        GetPluginName().GetCString());
+    error.SetErrorStringWithFormatv(
+        "error: {0} does not support attaching to a process by pid",
+        GetPluginName());
     return error;
   }
 
@@ -1028,9 +1023,8 @@ public:
   ///     operation.
   virtual Status DoLaunch(Module *exe_module, ProcessLaunchInfo &launch_info) {
     Status error;
-    error.SetErrorStringWithFormat(
-        "error: %s does not support launching processes",
-        GetPluginName().GetCString());
+    error.SetErrorStringWithFormatv(
+        "error: {0} does not support launching processes", GetPluginName());
     return error;
   }
 
@@ -1064,9 +1058,8 @@ public:
   /// \see Thread:Suspend()
   virtual Status DoResume() {
     Status error;
-    error.SetErrorStringWithFormat(
-        "error: %s does not support resuming processes",
-        GetPluginName().GetCString());
+    error.SetErrorStringWithFormatv(
+        "error: {0} does not support resuming processes", GetPluginName());
     return error;
   }
 
@@ -1100,9 +1093,8 @@ public:
   ///     otherwise.
   virtual Status DoHalt(bool &caused_stop) {
     Status error;
-    error.SetErrorStringWithFormat(
-        "error: %s does not support halting processes",
-        GetPluginName().GetCString());
+    error.SetErrorStringWithFormatv(
+        "error: {0} does not support halting processes", GetPluginName());
     return error;
   }
 
@@ -1127,9 +1119,9 @@ public:
   ///     false otherwise.
   virtual Status DoDetach(bool keep_stopped) {
     Status error;
-    error.SetErrorStringWithFormat(
-        "error: %s does not support detaching from processes",
-        GetPluginName().GetCString());
+    error.SetErrorStringWithFormatv(
+        "error: {0} does not support detaching from processes",
+        GetPluginName());
     return error;
   }
 
@@ -1158,9 +1150,9 @@ public:
   ///     Returns an error object.
   virtual Status DoSignal(int signal) {
     Status error;
-    error.SetErrorStringWithFormat(
-        "error: %s does not support sending signals to processes",
-        GetPluginName().GetCString());
+    error.SetErrorStringWithFormatv(
+        "error: {0} does not support sending signals to processes",
+        GetPluginName());
     return error;
   }
 
@@ -1487,36 +1479,6 @@ public:
   size_t ReadMemoryFromInferior(lldb::addr_t vm_addr, void *buf, size_t size,
                                 Status &error);
 
-  /// Read a NULL terminated string from memory
-  ///
-  /// This function will read a cache page at a time until a NULL string
-  /// terminator is found. It will stop reading if an aligned sequence of NULL
-  /// termination \a type_width bytes is not found before reading \a
-  /// cstr_max_len bytes.  The results are always guaranteed to be NULL
-  /// terminated, and that no more than (max_bytes - type_width) bytes will be
-  /// read.
-  ///
-  /// \param[in] vm_addr
-  ///     The virtual load address to start the memory read.
-  ///
-  /// \param[in] str
-  ///     A character buffer containing at least max_bytes.
-  ///
-  /// \param[in] max_bytes
-  ///     The maximum number of bytes to read.
-  ///
-  /// \param[in] error
-  ///     The error status of the read operation.
-  ///
-  /// \param[in] type_width
-  ///     The size of the null terminator (1 to 4 bytes per
-  ///     character).  Defaults to 1.
-  ///
-  /// \return
-  ///     The error status or the number of bytes prior to the null terminator.
-  size_t ReadStringFromMemory(lldb::addr_t vm_addr, char *str, size_t max_bytes,
-                              Status &error, size_t type_width = 1);
-
   /// Read a NULL terminated C string from memory
   ///
   /// This function will read a cache page at a time until the NULL
@@ -1587,9 +1549,8 @@ public:
   ///     The number of bytes that were actually written.
   virtual size_t DoWriteMemory(lldb::addr_t vm_addr, const void *buf,
                                size_t size, Status &error) {
-    error.SetErrorStringWithFormat(
-        "error: %s does not support writing to processes",
-        GetPluginName().GetCString());
+    error.SetErrorStringWithFormatv(
+        "error: {0} does not support writing to processes", GetPluginName());
     return 0;
   }
 
@@ -1671,9 +1632,9 @@ public:
 
   virtual lldb::addr_t DoAllocateMemory(size_t size, uint32_t permissions,
                                         Status &error) {
-    error.SetErrorStringWithFormat(
-        "error: %s does not support allocating in the debug process",
-        GetPluginName().GetCString());
+    error.SetErrorStringWithFormatv(
+        "error: {0} does not support allocating in the debug process",
+        GetPluginName());
     return LLDB_INVALID_ADDRESS;
   }
 
@@ -1798,7 +1759,7 @@ public:
   ///
   /// If load_addr is within the address space the process has mapped
   /// range_info will be filled in with the start and end of that range as
-  /// well as the permissions for that range and range_info.GetMapped will
+  /// well as the permissions for that range and range_info. GetMapped will
   /// return true.
   ///
   /// If load_addr is outside any mapped region then range_info will have its
@@ -1807,23 +1768,21 @@ public:
   /// there are no valid mapped ranges between load_addr and the end of the
   /// process address space.
   ///
-  /// GetMemoryRegionInfo will only return an error if it is unimplemented for
-  /// the current process.
+  /// GetMemoryRegionInfo calls DoGetMemoryRegionInfo. Override that function in
+  /// process subclasses.
   ///
   /// \param[in] load_addr
-  ///     The load address to query the range_info for.
+  ///     The load address to query the range_info for. May include non
+  ///     address bits, these will be removed by the the ABI plugin if there is
+  ///     one.
   ///
   /// \param[out] range_info
   ///     An range_info value containing the details of the range.
   ///
   /// \return
   ///     An error value.
-  virtual Status GetMemoryRegionInfo(lldb::addr_t load_addr,
-                                     MemoryRegionInfo &range_info) {
-    Status error;
-    error.SetErrorString("Process::GetMemoryRegionInfo() not supported");
-    return error;
-  }
+  Status GetMemoryRegionInfo(lldb::addr_t load_addr,
+                             MemoryRegionInfo &range_info);
 
   /// Obtain all the mapped memory regions within this process.
   ///
@@ -1923,12 +1882,12 @@ public:
   ///     want to deallocate.
   ///
   /// \return
-  ///     \btrue if the memory was deallocated, \bfalse otherwise.
+  ///     \b true if the memory was deallocated, \b false otherwise.
   virtual Status DoDeallocateMemory(lldb::addr_t ptr) {
     Status error;
-    error.SetErrorStringWithFormat(
-        "error: %s does not support deallocating in the debug process",
-        GetPluginName().GetCString());
+    error.SetErrorStringWithFormatv(
+        "error: {0} does not support deallocating in the debug process",
+        GetPluginName());
     return error;
   }
 
@@ -1942,7 +1901,7 @@ public:
   ///     want to deallocate.
   ///
   /// \return
-  ///     \btrue if the memory was deallocated, \bfalse otherwise.
+  ///     \b true if the memory was deallocated, \b false otherwise.
   Status DeallocateMemory(lldb::addr_t ptr);
 
   /// Get any available STDOUT.
@@ -2046,17 +2005,15 @@ public:
 
   virtual Status EnableBreakpointSite(BreakpointSite *bp_site) {
     Status error;
-    error.SetErrorStringWithFormat(
-        "error: %s does not support enabling breakpoints",
-        GetPluginName().GetCString());
+    error.SetErrorStringWithFormatv(
+        "error: {0} does not support enabling breakpoints", GetPluginName());
     return error;
   }
 
   virtual Status DisableBreakpointSite(BreakpointSite *bp_site) {
     Status error;
-    error.SetErrorStringWithFormat(
-        "error: %s does not support disabling breakpoints",
-        GetPluginName().GetCString());
+    error.SetErrorStringWithFormatv(
+        "error: {0} does not support disabling breakpoints", GetPluginName());
     return error;
   }
 
@@ -2645,6 +2602,26 @@ protected:
   virtual size_t DoReadMemory(lldb::addr_t vm_addr, void *buf, size_t size,
                               Status &error) = 0;
 
+  /// DoGetMemoryRegionInfo is called by GetMemoryRegionInfo after it has
+  /// removed non address bits from load_addr. Override this method in
+  /// subclasses of Process.
+  ///
+  /// See GetMemoryRegionInfo for details of the logic.
+  ///
+  /// \param[in] load_addr
+  ///     The load address to query the range_info for. (non address bits
+  ///     removed)
+  ///
+  /// \param[out] range_info
+  ///     An range_info value containing the details of the range.
+  ///
+  /// \return
+  ///     An error value.
+  virtual Status DoGetMemoryRegionInfo(lldb::addr_t load_addr,
+                                       MemoryRegionInfo &range_info) {
+    return Status("Process::DoGetMemoryRegionInfo() not supported");
+  }
+
   lldb::StateType GetPrivateState();
 
   /// The "private" side of resuming a process.  This doesn't alter the state
@@ -2656,35 +2633,6 @@ protected:
 
   // Called internally
   void CompleteAttach();
-
-  /// Print a user-visible warning one time per Process
-  ///
-  /// A facility for printing a warning to the user once per repeat_key.
-  ///
-  /// warning_type is from the Process::Warnings enums. repeat_key is a
-  /// pointer value that will be used to ensure that the warning message is
-  /// not printed multiple times.  For instance, with a warning about a
-  /// function being optimized, you can pass the CompileUnit pointer to have
-  /// the warning issued for only the first function in a CU, or the Function
-  /// pointer to have it issued once for every function, or a Module pointer
-  /// to have it issued once per Module.
-  ///
-  /// Classes outside Process should call a specific PrintWarning method so
-  /// that the warning strings are all centralized in Process, instead of
-  /// calling PrintWarning() directly.
-  ///
-  /// \param [in] warning_type
-  ///     One of the types defined in Process::Warnings.
-  ///
-  /// \param [in] repeat_key
-  ///     A pointer value used to ensure that the warning is only printed once.
-  ///     May be nullptr, indicating that the warning is printed unconditionally
-  ///     every time.
-  ///
-  /// \param [in] fmt
-  ///     printf style format string
-  void PrintWarning(uint64_t warning_type, const void *repeat_key,
-                    const char *fmt, ...) __attribute__((format(printf, 4, 5)));
 
   // NextEventAction provides a way to register an action on the next event
   // that is delivered to this process.  There is currently only one next event
@@ -2815,9 +2763,10 @@ protected:
   ///     if the read failed.
   virtual llvm::Expected<std::vector<uint8_t>>
   DoReadMemoryTags(lldb::addr_t addr, size_t len, int32_t type) {
-    return llvm::createStringError(llvm::inconvertibleErrorCode(),
-                                   "%s does not support reading memory tags",
-                                   GetPluginName().GetCString());
+    return llvm::createStringError(
+        llvm::inconvertibleErrorCode(),
+        llvm::formatv("{0} does not support reading memory tags",
+                      GetPluginName()));
   }
 
   /// Does the final operation to write memory tags. E.g. sending a GDB packet.
@@ -2840,15 +2789,15 @@ protected:
   ///     Status telling you whether the write succeeded.
   virtual Status DoWriteMemoryTags(lldb::addr_t addr, size_t len, int32_t type,
                                    const std::vector<uint8_t> &tags) {
-    return Status("%s does not support writing memory tags",
-                  GetPluginName().GetCString());
+    Status status;
+    status.SetErrorStringWithFormatv("{0} does not support writing memory tags",
+                                     GetPluginName());
+    return status;
   }
 
   // Type definitions
   typedef std::map<lldb::LanguageType, lldb::LanguageRuntimeSP>
       LanguageRuntimeCollection;
-  typedef std::unordered_set<const void *> WarningsPointerSet;
-  typedef std::map<uint64_t, WarningsPointerSet> WarningsCollection;
 
   struct PreResumeCallbackAndBaton {
     bool (*callback)(void *);
@@ -2978,11 +2927,9 @@ protected:
                                           /// ShouldBroadcastEvent.
   std::map<lldb::addr_t, lldb::addr_t> m_resolved_indirect_addresses;
   bool m_destroy_in_process;
-  bool m_can_interpret_function_calls;  // Some targets, e.g the OSX kernel,
-                                        // don't support the ability to modify
-                                        // the stack.
-  WarningsCollection m_warnings_issued; // A set of object pointers which have
-                                        // already had warnings printed
+  bool m_can_interpret_function_calls; // Some targets, e.g the OSX kernel,
+                                       // don't support the ability to modify
+                                       // the stack.
   std::mutex m_run_thread_plan_lock;
   StructuredDataPluginMap m_structured_data_plugin_map;
 
@@ -3009,17 +2956,6 @@ protected:
   void ResumePrivateStateThread();
 
 private:
-  struct PrivateStateThreadArgs {
-    PrivateStateThreadArgs(Process *p, bool s)
-        : process(p), is_secondary_thread(s){};
-    Process *process;
-    bool is_secondary_thread;
-  };
-
-  // arg is a pointer to a new'ed PrivateStateThreadArgs structure.
-  // PrivateStateThread will free it for you.
-  static lldb::thread_result_t PrivateStateThread(void *arg);
-
   // The starts up the private state thread that will watch for events from the
   // debugee. Pass true for is_secondary_thread in the case where you have to
   // temporarily spin up a secondary state thread to handle events from a hand-
@@ -3092,6 +3028,9 @@ private:
   bool ShouldBroadcastEvent(Event *event_ptr);
 
   void ControlPrivateStateThread(uint32_t signal);
+
+  Status LaunchPrivate(ProcessLaunchInfo &launch_info, lldb::StateType &state,
+                       lldb::EventSP &event_sp);
 
   Process(const Process &) = delete;
   const Process &operator=(const Process &) = delete;

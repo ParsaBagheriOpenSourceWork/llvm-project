@@ -62,6 +62,16 @@ let TargetPrefix = "x86" in {
               Intrinsic<[llvm_i32_ty], [], []>;
 }
 
+// Lock bit test.
+let TargetPrefix = "x86" in {
+  def int_x86_atomic_bts : Intrinsic<[llvm_anyint_ty], [llvm_ptr_ty, llvm_i8_ty],
+                                     [ImmArg<ArgIndex<1>>]>;
+  def int_x86_atomic_btc : Intrinsic<[llvm_anyint_ty], [llvm_ptr_ty, llvm_i8_ty],
+                                     [ImmArg<ArgIndex<1>>]>;
+  def int_x86_atomic_btr : Intrinsic<[llvm_anyint_ty], [llvm_ptr_ty, llvm_i8_ty],
+                                     [ImmArg<ArgIndex<1>>]>;
+}
+
 //===----------------------------------------------------------------------===//
 // CET SS
 let TargetPrefix = "x86" in {
@@ -5754,7 +5764,7 @@ let TargetPrefix = "x86" in {
                   [ llvm_v8f32_ty, llvm_v8f32_ty, llvm_v8f32_ty, llvm_i8_ty ],
                   [ IntrNoMem ]>;
   def int_x86_avx512fp16_mask_vfcmadd_cph_512
-      : GCCBuiltin<"__builtin_ia32_vfcmaddcph512_mask">,
+      : GCCBuiltin<"__builtin_ia32_vfcmaddcph512_mask3">,
         Intrinsic<[ llvm_v16f32_ty ],
                   [ llvm_v16f32_ty, llvm_v16f32_ty, llvm_v16f32_ty, llvm_i16_ty,
                     llvm_i32_ty ],
@@ -5786,7 +5796,7 @@ let TargetPrefix = "x86" in {
                   [ llvm_v8f32_ty, llvm_v8f32_ty, llvm_v8f32_ty, llvm_i8_ty ],
                   [ IntrNoMem ]>;
   def int_x86_avx512fp16_mask_vfmadd_cph_512
-      : GCCBuiltin<"__builtin_ia32_vfmaddcph512_mask">,
+      : GCCBuiltin<"__builtin_ia32_vfmaddcph512_mask3">,
         Intrinsic<[ llvm_v16f32_ty ],
                   [ llvm_v16f32_ty, llvm_v16f32_ty, llvm_v16f32_ty, llvm_i16_ty,
                     llvm_i32_ty ],

@@ -324,7 +324,7 @@ COMPILER_RT_VISIBILITY const char *lprofFindLastDirSeparator(const char *Path) {
   return Sep;
 }
 
-COMPILER_RT_VISIBILITY int lprofSuspendSigKill() {
+COMPILER_RT_VISIBILITY int lprofSuspendSigKill(void) {
 #if defined(__linux__)
   int PDeachSig = 0;
   /* Temporarily suspend getting SIGKILL upon exit of the parent process. */
@@ -342,7 +342,7 @@ COMPILER_RT_VISIBILITY int lprofSuspendSigKill() {
 #endif
 }
 
-COMPILER_RT_VISIBILITY void lprofRestoreSigKill() {
+COMPILER_RT_VISIBILITY void lprofRestoreSigKill(void) {
 #if defined(__linux__)
   prctl(PR_SET_PDEATHSIG, SIGKILL);
 #elif defined(__FreeBSD__)
@@ -353,6 +353,10 @@ COMPILER_RT_VISIBILITY void lprofRestoreSigKill() {
 
 COMPILER_RT_VISIBILITY int lprofReleaseMemoryPagesToOS(uintptr_t Begin,
                                                        uintptr_t End) {
+#if defined(__ve__)
+  // VE doesn't support madvise.
+  return 0;
+#else
   size_t PageSize = getpagesize();
   uintptr_t BeginAligned = lprofRoundUpTo((uintptr_t)Begin, PageSize);
   uintptr_t EndAligned = lprofRoundDownTo((uintptr_t)End, PageSize);
@@ -367,4 +371,5 @@ COMPILER_RT_VISIBILITY int lprofReleaseMemoryPagesToOS(uintptr_t Begin,
 #endif
   }
   return 0;
+#endif
 }

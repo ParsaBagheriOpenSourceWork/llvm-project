@@ -2,7 +2,7 @@
 
 // CHECK-LABEL: func @ops
 // CHECK-SAME: (%[[I32:.*]]: i32, %[[FLOAT:.*]]: f32, %[[I8PTR1:.*]]: !llvm.ptr<i8>, %[[I8PTR2:.*]]: !llvm.ptr<i8>, %[[BOOL:.*]]: i1, %[[VI8PTR1:.*]]: !llvm.vec<2 x ptr<i8>>)
-func @ops(%arg0: i32, %arg1: f32,
+func.func @ops(%arg0: i32, %arg1: f32,
           %arg2: !llvm.ptr<i8>, %arg3: !llvm.ptr<i8>,
           %arg4: i1, %arg5 : !llvm.vec<2x!llvm.ptr<i8>>) {
 // Integer arithmetic binary operations.
@@ -84,12 +84,12 @@ func @ops(%arg0: i32, %arg1: f32,
 // CHECK: %{{.*}} = llvm.mlir.constant(42 : i64) : i47
   %22 = llvm.mlir.undef : !llvm.struct<(i32, f64, i32)>
   %23 = llvm.mlir.constant(42) : i47
-  // CHECK:      llvm.switch %0, ^[[BB3]] [
+  // CHECK:      llvm.switch %0 : i32, ^[[BB3]] [
   // CHECK-NEXT:   1: ^[[BB4:.*]],
   // CHECK-NEXT:   2: ^[[BB5:.*]],
   // CHECK-NEXT:   3: ^[[BB6:.*]]
   // CHECK-NEXT: ]
-  llvm.switch %0, ^bb3 [
+  llvm.switch %0 : i32, ^bb3 [
     1: ^bb4,
     2: ^bb5,
     3: ^bb6
@@ -97,24 +97,24 @@ func @ops(%arg0: i32, %arg1: f32,
 
 // CHECK: ^[[BB3]]
 ^bb3:
-// CHECK:      llvm.switch %0, ^[[BB7:.*]] [
+// CHECK:      llvm.switch %0 : i32, ^[[BB7:.*]] [
 // CHECK-NEXT: ]
-  llvm.switch %0, ^bb7 [
+  llvm.switch %0 : i32, ^bb7 [
   ]
 
 // CHECK: ^[[BB4]]
 ^bb4:
-  llvm.switch %0, ^bb7 [
+  llvm.switch %0 : i32, ^bb7 [
   ]
 
 // CHECK: ^[[BB5]]
 ^bb5:
-  llvm.switch %0, ^bb7 [
+  llvm.switch %0 : i32, ^bb7 [
   ]
 
 // CHECK: ^[[BB6]]
 ^bb6:
-  llvm.switch %0, ^bb7 [
+  llvm.switch %0 : i32, ^bb7 [
   ]
 
 // CHECK: ^[[BB7]]
@@ -146,6 +146,9 @@ func @ops(%arg0: i32, %arg1: f32,
 // CHECK: "llvm.intr.pow"(%[[FLOAT]], %[[FLOAT]]) : (f32, f32) -> f32
   %31 = "llvm.intr.pow"(%arg1, %arg1) : (f32, f32) -> f32
 
+// CHECK: "llvm.intr.powi"(%[[FLOAT]], %[[I32]]) : (f32, i32) -> f32
+  %a31 = "llvm.intr.powi"(%arg1, %arg0) : (f32, i32) -> f32
+
 // CHECK: "llvm.intr.bitreverse"(%{{.*}}) : (i32) -> i32
   %32 = "llvm.intr.bitreverse"(%arg0) : (i32) -> i32
 
@@ -164,6 +167,16 @@ func @ops(%arg0: i32, %arg1: f32,
   "llvm.intr.memcpy.inline"(%arg2, %arg3, %sz, %arg4) : (!llvm.ptr<i8>, !llvm.ptr<i8>, i64, i1) -> ()
 
 // CHECK:  llvm.return
+  llvm.return
+}
+
+// CHECK-LABEL: @gep
+llvm.func @gep(%ptr: !llvm.ptr<struct<(i32, struct<(i32, f32)>)>>, %idx: i64,
+               %ptr2: !llvm.ptr<struct<(array<10xf32>)>>) {
+  // CHECK: llvm.getelementptr %{{.*}}[%{{.*}}, 1, 0] : (!llvm.ptr<struct<(i32, struct<(i32, f32)>)>>, i64) -> !llvm.ptr<i32>
+  llvm.getelementptr %ptr[%idx, 1, 0] : (!llvm.ptr<struct<(i32, struct<(i32, f32)>)>>, i64) -> !llvm.ptr<i32>
+  // CHECK: llvm.getelementptr %{{.*}}[%{{.*}}, 0, %{{.*}}] : (!llvm.ptr<struct<(array<10 x f32>)>>, i64, i64) -> !llvm.ptr<f32>
+  llvm.getelementptr %ptr2[%idx, 0, %idx] : (!llvm.ptr<struct<(array<10 x f32>)>>, i64, i64) -> !llvm.ptr<f32>
   llvm.return
 }
 
@@ -228,7 +241,7 @@ llvm.func @foo(%arg0: i32) -> !llvm.struct<(i32, f64, i32)> {
 
 // CHECK-LABEL: @casts
 // CHECK-SAME: (%[[I32:.*]]: i32, %[[I64:.*]]: i64, %[[V4I32:.*]]: vector<4xi32>, %[[V4I64:.*]]: vector<4xi64>, %[[I32PTR:.*]]: !llvm.ptr<i32>)
-func @casts(%arg0: i32, %arg1: i64, %arg2: vector<4xi32>,
+func.func @casts(%arg0: i32, %arg1: i64, %arg2: vector<4xi32>,
             %arg3: vector<4xi64>, %arg4: !llvm.ptr<i32>) {
 // CHECK:  = llvm.sext %[[I32]] : i32 to i56
   %0 = llvm.sext %arg0 : i32 to i56
@@ -256,7 +269,7 @@ func @casts(%arg0: i32, %arg1: i64, %arg2: vector<4xi32>,
 }
 
 // CHECK-LABEL: @vect
-func @vect(%arg0: vector<4xf32>, %arg1: i32, %arg2: f32) {
+func.func @vect(%arg0: vector<4xf32>, %arg1: i32, %arg2: f32) {
 // CHECK:  = llvm.extractelement {{.*}} : vector<4xf32>
   %0 = llvm.extractelement %arg0[%arg1 : i32] : vector<4xf32>
 // CHECK:  = llvm.insertelement {{.*}} : vector<4xf32>
@@ -268,8 +281,21 @@ func @vect(%arg0: vector<4xf32>, %arg1: i32, %arg2: f32) {
   return
 }
 
+// CHECK-LABEL: @scalable_vect
+func.func @scalable_vect(%arg0: vector<[4]xf32>, %arg1: i32, %arg2: f32) {
+// CHECK:  = llvm.extractelement {{.*}} : vector<[4]xf32>
+  %0 = llvm.extractelement %arg0[%arg1 : i32] : vector<[4]xf32>
+// CHECK:  = llvm.insertelement {{.*}} : vector<[4]xf32>
+  %1 = llvm.insertelement %arg2, %arg0[%arg1 : i32] : vector<[4]xf32>
+// CHECK:  = llvm.shufflevector {{.*}} [0 : i32, 0 : i32, 0 : i32, 0 : i32] : vector<[4]xf32>, vector<[4]xf32>
+  %2 = llvm.shufflevector %arg0, %arg0 [0 : i32, 0 : i32, 0 : i32, 0 : i32] : vector<[4]xf32>, vector<[4]xf32>
+// CHECK:  = llvm.mlir.constant(dense<1.000000e+00> : vector<[4]xf32>) : vector<[4]xf32>
+  %3 = llvm.mlir.constant(dense<1.0> : vector<[4]xf32>) : vector<[4]xf32>
+  return
+}
+
 // CHECK-LABEL: @alloca
-func @alloca(%size : i64) {
+func.func @alloca(%size : i64) {
   // CHECK: llvm.alloca %{{.*}} x i32 : (i64) -> !llvm.ptr<i32>
   llvm.alloca %size x i32 {alignment = 0} : (i64) -> (!llvm.ptr<i32>)
   // CHECK: llvm.alloca %{{.*}} x i32 {alignment = 8 : i64} : (i64) -> !llvm.ptr<i32>
@@ -278,7 +304,7 @@ func @alloca(%size : i64) {
 }
 
 // CHECK-LABEL: @null
-func @null() {
+func.func @null() {
   // CHECK: llvm.mlir.null : !llvm.ptr<i8>
   %0 = llvm.mlir.null : !llvm.ptr<i8>
   // CHECK: llvm.mlir.null : !llvm.ptr<struct<(ptr<func<void (i32, ptr<func<void ()>>)>>, i64)>>
@@ -287,14 +313,14 @@ func @null() {
 }
 
 // CHECK-LABEL: @atomicrmw
-func @atomicrmw(%ptr : !llvm.ptr<f32>, %val : f32) {
+func.func @atomicrmw(%ptr : !llvm.ptr<f32>, %val : f32) {
   // CHECK: llvm.atomicrmw fadd %{{.*}}, %{{.*}} monotonic : f32
   %0 = llvm.atomicrmw fadd %ptr, %val monotonic : f32
   llvm.return
 }
 
 // CHECK-LABEL: @cmpxchg
-func @cmpxchg(%ptr : !llvm.ptr<i32>, %cmp : i32, %new : i32) {
+func.func @cmpxchg(%ptr : !llvm.ptr<i32>, %cmp : i32, %new : i32) {
   // CHECK: llvm.cmpxchg %{{.*}}, %{{.*}}, %{{.*}} acq_rel monotonic : i32
   %0 = llvm.cmpxchg %ptr, %cmp, %new acq_rel monotonic : i32
   llvm.return
@@ -329,9 +355,11 @@ llvm.func @invokeLandingpad() -> i32 attributes { personality = @__gxx_personali
 
 // CHECK: ^[[BB1]]:
 // CHECK:   %[[lp:.*]] = llvm.landingpad cleanup (catch %[[a3]] : !llvm.ptr<ptr<i8>>) (catch %[[a6]] : !llvm.ptr<i8>) (filter %[[a2]] : !llvm.array<1 x i8>) : !llvm.struct<(ptr<i8>, i32)>
+// CHECK:   %{{.*}} = llvm.intr.eh.typeid.for %6 : i32
 // CHECK:   llvm.resume %[[lp]] : !llvm.struct<(ptr<i8>, i32)>
 ^bb1:
   %10 = llvm.landingpad cleanup (catch %3 : !llvm.ptr<ptr<i8>>) (catch %6 : !llvm.ptr<i8>) (filter %2 : !llvm.array<1 x i8>) : !llvm.struct<(ptr<i8>, i32)>
+  %11 = llvm.intr.eh.typeid.for %6 : i32
   llvm.resume %10 : !llvm.struct<(ptr<i8>, i32)>
 
 // CHECK: ^[[BB2]]:
@@ -351,7 +379,7 @@ llvm.func @invokeLandingpad() -> i32 attributes { personality = @__gxx_personali
 }
 
 // CHECK-LABEL: @useFreezeOp
-func @useFreezeOp(%arg0: i32) {
+func.func @useFreezeOp(%arg0: i32) {
   // CHECK:  = llvm.freeze %[[ARG0:.*]] : i32
   %0 = llvm.freeze %arg0 : i32
   // CHECK: %[[x:.*]] = llvm.mlir.undef : i8
@@ -362,7 +390,7 @@ func @useFreezeOp(%arg0: i32) {
 }
 
 // CHECK-LABEL: @useFenceInst
-func @useFenceInst() {
+func.func @useFenceInst() {
   // CHECK:  syncscope("agent") seq_cst
   llvm.fence syncscope("agent") seq_cst
   // CHECK:  seq_cst
@@ -393,7 +421,7 @@ llvm.func @useInlineAsm(%arg0: i32) {
 }
 
 // CHECK-LABEL: @fastmathFlags
-func @fastmathFlags(%arg0: f32, %arg1: f32, %arg2: i32) {
+func.func @fastmathFlags(%arg0: f32, %arg1: f32, %arg2: i32) {
 // CHECK: {{.*}} = llvm.fadd %arg0, %arg1 {fastmathFlags = #llvm.fastmath<fast>} : f32
 // CHECK: {{.*}} = llvm.fsub %arg0, %arg1 {fastmathFlags = #llvm.fastmath<fast>} : f32
 // CHECK: {{.*}} = llvm.fmul %arg0, %arg1 {fastmathFlags = #llvm.fastmath<fast>} : f32
@@ -417,7 +445,7 @@ func @fastmathFlags(%arg0: f32, %arg1: f32, %arg2: i32) {
 // CHECK: {{.*}} = llvm.fadd %arg0, %arg1 : f32
   %8 = llvm.fadd %arg0, %arg1 {fastmathFlags = #llvm.fastmath<>} : f32
 // CHECK: {{.*}} = llvm.fadd %arg0, %arg1 {fastmathFlags = #llvm.fastmath<nnan, ninf>} : f32
-  %9 = llvm.fadd %arg0, %arg1 {fastmathFlags = #llvm.fastmath<nnan, ninf>} : f32
+  %9 = llvm.fadd %arg0, %arg1 {fastmathFlags = #llvm.fastmath<nnan,ninf>} : f32
 
 // CHECK: {{.*}} = llvm.fneg %arg0 : f32
   %10 = llvm.fneg %arg0 {fastmathFlags = #llvm.fastmath<>} : f32

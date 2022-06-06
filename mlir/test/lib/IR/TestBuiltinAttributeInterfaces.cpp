@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "TestAttributes.h"
+#include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
 #include "llvm/Support/FormatVariadic.h"
 
@@ -16,6 +17,8 @@ using namespace test;
 namespace {
 struct TestElementsAttrInterface
     : public PassWrapper<TestElementsAttrInterface, OperationPass<ModuleOp>> {
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(TestElementsAttrInterface)
+
   StringRef getArgument() const final { return "test-elements-attr-interface"; }
   StringRef getDescription() const final {
     return "Test ElementsAttr interface support.";
@@ -23,7 +26,7 @@ struct TestElementsAttrInterface
   void runOnOperation() override {
     getOperation().walk([&](Operation *op) {
       for (NamedAttribute attr : op->getAttrs()) {
-        auto elementsAttr = attr.second.dyn_cast<ElementsAttr>();
+        auto elementsAttr = attr.getValue().dyn_cast<ElementsAttr>();
         if (!elementsAttr)
           continue;
         testElementsAttrIteration<uint64_t>(op, elementsAttr, "uint64_t");
@@ -50,7 +53,7 @@ struct TestElementsAttrInterface
     });
   }
 };
-} // end anonymous namespace
+} // namespace
 
 namespace mlir {
 namespace test {

@@ -106,11 +106,11 @@ compound=true
     label="\<x1\> TopRegion"
     N1 [label =
       "entry:\l" +
-      "Successor(s): for.body\l"
+      "Successor(s): vector.body\l"
     ]
     N1 -> N2 [ label=""]
     N2 [label =
-      "for.body:\l" +
+      "vector.body:\l" +
       "  WIDEN-PHI ir\<%indvars.iv\> = phi ir\<0\>, ir\<%indvars.iv.next\>\l" +
       "  EMIT ir\<%arr.idx\> = getelementptr ir\<%A\> ir\<%indvars.iv\>\l" +
       "  EMIT ir\<%l1\> = load ir\<%arr.idx\>\l" +
@@ -118,8 +118,8 @@ compound=true
       "  EMIT store ir\<%res\> ir\<%arr.idx\>\l" +
       "  EMIT ir\<%indvars.iv.next\> = add ir\<%indvars.iv\> ir\<1\>\l" +
       "  EMIT ir\<%exitcond\> = icmp ir\<%indvars.iv.next\> ir\<%N\>\l" +
-      "Successor(s): for.body, for.end\l" +
-      "CondBit: ir\<%exitcond\> (for.body)\l"
+      "Successor(s): vector.body, for.end\l" +
+      "CondBit: ir\<%exitcond\> (vector.body)\l"
     ]
     N2 -> N2 [ label="T"]
     N2 -> N3 [ label="F"]
@@ -134,10 +134,10 @@ compound=true
   EXPECT_EQ(ExpectedStr, FullDump);
 #endif
 
-  LoopVectorizationLegality::InductionList Inductions;
   SmallPtrSet<Instruction *, 1> DeadInstructions;
-  VPlanTransforms::VPInstructionsToVPRecipes(LI->getLoopFor(LoopHeader), Plan,
-                                             Inductions, DeadInstructions, *SE);
+  VPlanTransforms::VPInstructionsToVPRecipes(
+      LI->getLoopFor(LoopHeader), Plan, [](PHINode *P) { return nullptr; },
+      DeadInstructions, *SE);
 }
 
 TEST_F(VPlanHCFGTest, testVPInstructionToVPRecipesInner) {
@@ -164,10 +164,10 @@ TEST_F(VPlanHCFGTest, testVPInstructionToVPRecipesInner) {
   BasicBlock *LoopHeader = F->getEntryBlock().getSingleSuccessor();
   auto Plan = buildHCFG(LoopHeader);
 
-  LoopVectorizationLegality::InductionList Inductions;
   SmallPtrSet<Instruction *, 1> DeadInstructions;
-  VPlanTransforms::VPInstructionsToVPRecipes(LI->getLoopFor(LoopHeader), Plan,
-                                             Inductions, DeadInstructions, *SE);
+  VPlanTransforms::VPInstructionsToVPRecipes(
+      LI->getLoopFor(LoopHeader), Plan, [](PHINode *P) { return nullptr; },
+      DeadInstructions, *SE);
 
   VPBlockBase *Entry = Plan->getEntry()->getEntryBasicBlock();
   EXPECT_NE(nullptr, Entry->getSingleSuccessor());

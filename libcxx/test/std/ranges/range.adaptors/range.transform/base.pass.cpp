@@ -7,7 +7,6 @@
 //===----------------------------------------------------------------------===//
 
 // UNSUPPORTED: c++03, c++11, c++14, c++17
-// UNSUPPORTED: libcpp-no-concepts
 // UNSUPPORTED: libcpp-has-no-incomplete-ranges
 
 // constexpr V base() const& requires copy_constructible<V>
@@ -20,9 +19,9 @@
 
 constexpr bool test() {
   {
-    std::ranges::transform_view<ContiguousView, PlusOne> transformView;
-    ContiguousView base = std::move(transformView).base();
-    ASSERT_SAME_TYPE(ContiguousView, decltype(std::move(transformView).base()));
+    std::ranges::transform_view<MoveOnlyView, PlusOne> transformView;
+    MoveOnlyView base = std::move(transformView).base();
+    ASSERT_SAME_TYPE(MoveOnlyView, decltype(std::move(transformView).base()));
     assert(std::ranges::begin(base) == globalBuff);
   }
 

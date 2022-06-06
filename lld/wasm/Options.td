@@ -141,8 +141,9 @@ def z: JoinedOrSeparate<["-"], "z">, MetaVarName<"<option>">,
 // The follow flags are unique to wasm
 
 def allow_undefined: F<"allow-undefined">,
-  HelpText<"Allow undefined symbols in linked binary. This options is equivelant "
-           "to --import-undefined and --unresolved-symbols=ignore-all">;
+  HelpText<"Allow undefined symbols in linked binary. "
+           "This options is equivalent to --import-undefined "
+           "and --unresolved-symbols=ignore-all">;
 
 def import_undefined: F<"import-undefined">,
   HelpText<"Turn undefined symbols into imports where possible">;
@@ -227,7 +228,8 @@ def thinlto_cache_dir: J<"thinlto-cache-dir=">,
 defm thinlto_cache_policy: Eq<"thinlto-cache-policy", "Pruning policy for the ThinLTO cache">;
 def thinlto_jobs: J<"thinlto-jobs=">,
   HelpText<"Number of ThinLTO jobs. Default to --threads=">;
-defm lto_legacy_pass_manager: BB<"lto-legacy-pass-manager", "Use legacy pass manager", "Use new pass manager">;
+def no_lto_legacy_pass_manager: F<"no-lto-legacy-pass-manager">,
+  HelpText<"Use new pass manager">;
 def lto_debug_pass_manager: F<"lto-debug-pass-manager">,
   HelpText<"Debug new pass manager">;
 

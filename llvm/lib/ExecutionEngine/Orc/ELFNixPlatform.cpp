@@ -28,8 +28,8 @@ class DSOHandleMaterializationUnit : public MaterializationUnit {
 public:
   DSOHandleMaterializationUnit(ELFNixPlatform &ENP,
                                const SymbolStringPtr &DSOHandleSymbol)
-      : MaterializationUnit(createDSOHandleSectionSymbols(ENP, DSOHandleSymbol),
-                            DSOHandleSymbol),
+      : MaterializationUnit(
+            createDSOHandleSectionInterface(ENP, DSOHandleSymbol)),
         ENP(ENP) {}
 
   StringRef getName() const override { return "DSOHandleMU"; }
@@ -56,9 +56,10 @@ public:
         "<DSOHandleMU>", TT, PointerSize, Endianness,
         jitlink::getGenericEdgeKindName);
     auto &DSOHandleSection =
-        G->createSection(".data.__dso_handle", sys::Memory::MF_READ);
+        G->createSection(".data.__dso_handle", jitlink::MemProt::Read);
     auto &DSOHandleBlock = G->createContentBlock(
-        DSOHandleSection, getDSOHandleContent(PointerSize), 0, 8, 0);
+        DSOHandleSection, getDSOHandleContent(PointerSize), orc::ExecutorAddr(),
+        8, 0);
     auto &DSOHandleSymbol = G->addDefinedSymbol(
         DSOHandleBlock, 0, *R->getInitializerSymbol(), DSOHandleBlock.getSize(),
         jitlink::Linkage::Strong, jitlink::Scope::Default, false, true);
@@ -70,12 +71,13 @@ public:
   void discard(const JITDylib &JD, const SymbolStringPtr &Sym) override {}
 
 private:
-  static SymbolFlagsMap
-  createDSOHandleSectionSymbols(ELFNixPlatform &ENP,
-                                const SymbolStringPtr &DSOHandleSymbol) {
+  static MaterializationUnit::Interface
+  createDSOHandleSectionInterface(ELFNixPlatform &ENP,
+                                  const SymbolStringPtr &DSOHandleSymbol) {
     SymbolFlagsMap SymbolFlags;
     SymbolFlags[DSOHandleSymbol] = JITSymbolFlags::Exported;
-    return SymbolFlags;
+    return MaterializationUnit::Interface(std::move(SymbolFlags),
+                                          DSOHandleSymbol);
   }
 
   ArrayRef<char> getDSOHandleContent(size_t PointerSize) {
@@ -115,8 +117,12 @@ ELFNixPlatform::Create(ExecutionSession &ES,
                                    inconvertibleErrorCode());
 
   // Create default aliases if the caller didn't supply any.
-  if (!RuntimeAliases)
-    RuntimeAliases = standardPlatformAliases(ES);
+  if (!RuntimeAliases) {
+    auto StandardRuntimeAliases = standardPlatformAliases(ES, PlatformJD);
+    if (!StandardRuntimeAliases)
+      return StandardRuntimeAliases.takeError();
+    RuntimeAliases = std::move(*StandardRuntimeAliases);
+  }
 
   // Define the aliases.
   if (auto Err = PlatformJD.define(symbolAliases(std::move(*RuntimeAliases))))
@@ -125,10 +131,10 @@ ELFNixPlatform::Create(ExecutionSession &ES,
   // Add JIT-dispatch function support symbols.
   if (auto Err = PlatformJD.define(absoluteSymbols(
           {{ES.intern("__orc_rt_jit_dispatch"),
-            {EPC.getJITDispatchInfo().JITDispatchFunctionAddress.getValue(),
+            {EPC.getJITDispatchInfo().JITDispatchFunction.getValue(),
              JITSymbolFlags::Exported}},
            {ES.intern("__orc_rt_jit_dispatch_ctx"),
-            {EPC.getJITDispatchInfo().JITDispatchContextAddress.getValue(),
+            {EPC.getJITDispatchInfo().JITDispatchContext.getValue(),
              JITSymbolFlags::Exported}}})))
     return std::move(Err);
 
@@ -151,6 +157,9 @@ ELFNixPlatform::Create(ExecutionSession &ES,
 Error ELFNixPlatform::setupJITDylib(JITDylib &JD) {
   return JD.define(
       std::make_unique<DSOHandleMaterializationUnit>(*this, DSOHandleSymbol));
+}
+
+Error ELFNixPlatform::teardownJITDylib(JITDylib &JD) {
   return Error::success();
 }
 
@@ -184,17 +193,61 @@ static void addAliases(ExecutionSession &ES, SymbolAliasMap &Aliases,
   }
 }
 
-SymbolAliasMap ELFNixPlatform::standardPlatformAliases(ExecutionSession &ES) {
+Expected<SymbolAliasMap>
+ELFNixPlatform::standardPlatformAliases(ExecutionSession &ES,
+                                        JITDylib &PlatformJD) {
   SymbolAliasMap Aliases;
   addAliases(ES, Aliases, requiredCXXAliases());
   addAliases(ES, Aliases, standardRuntimeUtilityAliases());
+
+  // Determine whether or not the libunwind extended-API function for
+  // dynamically registering an entire .eh_frame section is available.
+  // If it is not, we assume that libgcc_s is being used, and alias to
+  // its __register_frame with the same functionality.
+  auto RTRegisterFrame = ES.intern("__orc_rt_register_eh_frame_section");
+  auto LibUnwindRegisterFrame = ES.intern("__unw_add_dynamic_eh_frame_section");
+  auto RTDeregisterFrame = ES.intern("__orc_rt_deregister_eh_frame_section");
+  auto LibUnwindDeregisterFrame =
+      ES.intern("__unw_remove_dynamic_eh_frame_section");
+  auto SM = ES.lookup(makeJITDylibSearchOrder(&PlatformJD),
+                      SymbolLookupSet()
+                          .add(LibUnwindRegisterFrame,
+                               SymbolLookupFlags::WeaklyReferencedSymbol)
+                          .add(LibUnwindDeregisterFrame,
+                               SymbolLookupFlags::WeaklyReferencedSymbol));
+  if (!SM) { // Weak-ref means no "missing symbol" errors, so this must be
+             // something more serious that we should report.
+    return SM.takeError();
+  } else if (SM->size() == 2) {
+    LLVM_DEBUG({
+      dbgs() << "Using libunwind " << LibUnwindRegisterFrame
+             << " for unwind info registration\n";
+    });
+    Aliases[std::move(RTRegisterFrame)] = {LibUnwindRegisterFrame,
+                                           JITSymbolFlags::Exported};
+    Aliases[std::move(RTDeregisterFrame)] = {LibUnwindDeregisterFrame,
+                                             JITSymbolFlags::Exported};
+  } else {
+    // Since LLVM libunwind is not present, we assume that unwinding
+    // is provided by libgcc
+    LLVM_DEBUG({
+      dbgs() << "Using libgcc __register_frame"
+             << " for unwind info registration\n";
+    });
+    Aliases[std::move(RTRegisterFrame)] = {ES.intern("__register_frame"),
+                                           JITSymbolFlags::Exported};
+    Aliases[std::move(RTDeregisterFrame)] = {ES.intern("__deregister_frame"),
+                                             JITSymbolFlags::Exported};
+  }
+
   return Aliases;
 }
 
 ArrayRef<std::pair<const char *, const char *>>
 ELFNixPlatform::requiredCXXAliases() {
   static const std::pair<const char *, const char *> RequiredCXXAliases[] = {
-      {"__cxa_atexit", "__orc_rt_elfnix_cxa_atexit"}};
+      {"__cxa_atexit", "__orc_rt_elfnix_cxa_atexit"},
+      {"atexit", "__orc_rt_elfnix_atexit"}};
 
   return ArrayRef<std::pair<const char *, const char *>>(RequiredCXXAliases);
 }
@@ -274,13 +327,13 @@ Error ELFNixPlatform::associateRuntimeSupportFunctions(JITDylib &PlatformJD) {
           this, &ELFNixPlatform::rt_getInitializers);
 
   using GetDeinitializersSPSSig =
-      SPSExpected<SPSELFJITDylibDeinitializerSequence>(SPSExecutorAddress);
+      SPSExpected<SPSELFJITDylibDeinitializerSequence>(SPSExecutorAddr);
   WFs[ES.intern("__orc_rt_elfnix_get_deinitializers_tag")] =
       ES.wrapAsyncWithSPS<GetDeinitializersSPSSig>(
           this, &ELFNixPlatform::rt_getDeinitializers);
 
   using LookupSymbolSPSSig =
-      SPSExpected<SPSExecutorAddress>(SPSExecutorAddress, SPSString);
+      SPSExpected<SPSExecutorAddr>(SPSExecutorAddr, SPSString);
   WFs[ES.intern("__orc_rt_elfnix_symbol_lookup_tag")] =
       ES.wrapAsyncWithSPS<LookupSymbolSPSSig>(this,
                                               &ELFNixPlatform::rt_lookupSymbol);
@@ -314,9 +367,14 @@ void ELFNixPlatform::getInitializersLookupPhase(
     SendInitializerSequenceFn SendResult, JITDylib &JD) {
 
   auto DFSLinkOrder = JD.getDFSLinkOrder();
+  if (!DFSLinkOrder) {
+    SendResult(DFSLinkOrder.takeError());
+    return;
+  }
+
   DenseMap<JITDylib *, SymbolLookupSet> NewInitSymbols;
   ES.runSessionLocked([&]() {
-    for (auto &InitJD : DFSLinkOrder) {
+    for (auto &InitJD : *DFSLinkOrder) {
       auto RISItr = RegisteredInitSymbols.find(InitJD.get());
       if (RISItr != RegisteredInitSymbols.end()) {
         NewInitSymbols[InitJD.get()] = std::move(RISItr->second);
@@ -329,7 +387,7 @@ void ELFNixPlatform::getInitializersLookupPhase(
   // phase.
   if (NewInitSymbols.empty()) {
     getInitializersBuildSequencePhase(std::move(SendResult), JD,
-                                      std::move(DFSLinkOrder));
+                                      std::move(*DFSLinkOrder));
     return;
   }
 
@@ -364,7 +422,7 @@ void ELFNixPlatform::rt_getInitializers(SendInitializerSequenceFn SendResult,
 }
 
 void ELFNixPlatform::rt_getDeinitializers(
-    SendDeinitializerSequenceFn SendResult, ExecutorAddress Handle) {
+    SendDeinitializerSequenceFn SendResult, ExecutorAddr Handle) {
   LLVM_DEBUG({
     dbgs() << "ELFNixPlatform::rt_getDeinitializers(\""
            << formatv("{0:x}", Handle.getValue()) << "\")\n";
@@ -374,7 +432,7 @@ void ELFNixPlatform::rt_getDeinitializers(
 
   {
     std::lock_guard<std::mutex> Lock(PlatformMutex);
-    auto I = HandleAddrToJITDylib.find(Handle.getValue());
+    auto I = HandleAddrToJITDylib.find(Handle);
     if (I != HandleAddrToJITDylib.end())
       JD = I->second;
   }
@@ -394,7 +452,7 @@ void ELFNixPlatform::rt_getDeinitializers(
 }
 
 void ELFNixPlatform::rt_lookupSymbol(SendSymbolAddressFn SendResult,
-                                     ExecutorAddress Handle,
+                                     ExecutorAddr Handle,
                                      StringRef SymbolName) {
   LLVM_DEBUG({
     dbgs() << "ELFNixPlatform::rt_lookupSymbol(\""
@@ -405,7 +463,7 @@ void ELFNixPlatform::rt_lookupSymbol(SendSymbolAddressFn SendResult,
 
   {
     std::lock_guard<std::mutex> Lock(PlatformMutex);
-    auto I = HandleAddrToJITDylib.find(Handle.getValue());
+    auto I = HandleAddrToJITDylib.find(Handle);
     if (I != HandleAddrToJITDylib.end())
       JD = I->second;
   }
@@ -429,7 +487,7 @@ void ELFNixPlatform::rt_lookupSymbol(SendSymbolAddressFn SendResult,
     void operator()(Expected<SymbolMap> Result) {
       if (Result) {
         assert(Result->size() == 1 && "Unexpected result map count");
-        SendResult(ExecutorAddress(Result->begin()->second.getAddress()));
+        SendResult(ExecutorAddr(Result->begin()->second.getAddress()));
       } else {
         SendResult(Result.takeError());
       }
@@ -447,7 +505,7 @@ void ELFNixPlatform::rt_lookupSymbol(SendSymbolAddressFn SendResult,
 
 Error ELFNixPlatform::bootstrapELFNixRuntime(JITDylib &PlatformJD) {
 
-  std::pair<const char *, ExecutorAddress *> Symbols[] = {
+  std::pair<const char *, ExecutorAddr *> Symbols[] = {
       {"__orc_rt_elfnix_platform_bootstrap", &orc_rt_elfnix_platform_bootstrap},
       {"__orc_rt_elfnix_platform_shutdown", &orc_rt_elfnix_platform_shutdown},
       {"__orc_rt_elfnix_register_object_sections",
@@ -456,7 +514,7 @@ Error ELFNixPlatform::bootstrapELFNixRuntime(JITDylib &PlatformJD) {
        &orc_rt_elfnix_create_pthread_key}};
 
   SymbolLookupSet RuntimeSymbols;
-  std::vector<std::pair<SymbolStringPtr, ExecutorAddress *>> AddrsToRecord;
+  std::vector<std::pair<SymbolStringPtr, ExecutorAddr *>> AddrsToRecord;
   for (const auto &KV : Symbols) {
     auto Name = ES.intern(KV.first);
     RuntimeSymbols.add(Name);
@@ -474,8 +532,13 @@ Error ELFNixPlatform::bootstrapELFNixRuntime(JITDylib &PlatformJD) {
     KV.second->setValue((*RuntimeSymbolAddrs)[Name].getAddress());
   }
 
-  if (auto Err = ES.callSPSWrapper<void()>(
-          orc_rt_elfnix_platform_bootstrap.getValue()))
+  auto PJDDSOHandle = ES.lookup(
+      {{&PlatformJD, JITDylibLookupFlags::MatchAllSymbols}}, DSOHandleSymbol);
+  if (!PJDDSOHandle)
+    return PJDDSOHandle.takeError();
+
+  if (auto Err = ES.callSPSWrapper<void(uint64_t)>(
+          orc_rt_elfnix_platform_bootstrap, PJDDSOHandle->getAddress()))
     return Err;
 
   // FIXME: Ordering is fuzzy here. We're probably best off saying
@@ -525,7 +588,7 @@ Error ELFNixPlatform::registerInitInfo(
     // FIXME: Avoid copy here.
     jitlink::SectionRange R(*Sec);
     InitSeq->InitSections[Sec->getName()].push_back(
-        {ExecutorAddress(R.getStart()), ExecutorAddress(R.getEnd())});
+        {ExecutorAddr(R.getStart()), ExecutorAddr(R.getEnd())});
   }
 
   return Error::success();
@@ -543,7 +606,7 @@ Error ELFNixPlatform::registerPerObjectSections(
   Error ErrResult = Error::success();
   if (auto Err = ES.callSPSWrapper<shared::SPSError(
                      SPSELFPerObjectSectionsToRegister)>(
-          orc_rt_elfnix_register_object_sections.getValue(), ErrResult, POSR))
+          orc_rt_elfnix_register_object_sections, ErrResult, POSR))
     return Err;
   return ErrResult;
 }
@@ -557,7 +620,7 @@ Expected<uint64_t> ELFNixPlatform::createPThreadKey() {
 
   Expected<uint64_t> Result(0);
   if (auto Err = ES.callSPSWrapper<SPSExpected<uint64_t>(void)>(
-          orc_rt_elfnix_create_pthread_key.getValue(), Result))
+          orc_rt_elfnix_create_pthread_key, Result))
     return std::move(Err);
   return Result;
 }
@@ -624,12 +687,11 @@ void ELFNixPlatform::ELFNixPlatformPlugin::addDSOHandleSupportPasses(
     assert(I != G.defined_symbols().end() && "Missing DSO handle symbol");
     {
       std::lock_guard<std::mutex> Lock(MP.PlatformMutex);
-      JITTargetAddress HandleAddr = (*I)->getAddress();
+      auto HandleAddr = (*I)->getAddress();
       MP.HandleAddrToJITDylib[HandleAddr] = &JD;
       assert(!MP.InitSeqs.count(&JD) && "InitSeq entry for JD already exists");
-      MP.InitSeqs.insert(
-          std::make_pair(&JD, ELFNixJITDylibInitializers(
-                                  JD.getName(), ExecutorAddress(HandleAddr))));
+      MP.InitSeqs.insert(std::make_pair(
+          &JD, ELFNixJITDylibInitializers(JD.getName(), HandleAddr)));
     }
     return Error::success();
   });
@@ -656,8 +718,8 @@ void ELFNixPlatform::ELFNixPlatformPlugin::addEHAndTLVSupportPasses(
     if (auto *EHFrameSection = G.findSectionByName(EHFrameSectionName)) {
       jitlink::SectionRange R(*EHFrameSection);
       if (!R.empty())
-        POSR.EHFrameSection = {ExecutorAddress(R.getStart()),
-                               ExecutorAddress(R.getEnd())};
+        POSR.EHFrameSection = {ExecutorAddr(R.getStart()),
+                               ExecutorAddr(R.getEnd())};
     }
 
     // Get a pointer to the thread data section if there is one. It will be used
@@ -681,12 +743,11 @@ void ELFNixPlatform::ELFNixPlatformPlugin::addEHAndTLVSupportPasses(
     if (ThreadDataSection) {
       jitlink::SectionRange R(*ThreadDataSection);
       if (!R.empty())
-        POSR.ThreadDataSection = {ExecutorAddress(R.getStart()),
-                                  ExecutorAddress(R.getEnd())};
+        POSR.ThreadDataSection = {ExecutorAddr(R.getStart()),
+                                  ExecutorAddr(R.getEnd())};
     }
 
-    if (POSR.EHFrameSection.StartAddress ||
-        POSR.ThreadDataSection.StartAddress) {
+    if (POSR.EHFrameSection.Start || POSR.ThreadDataSection.Start) {
 
       // If we're still bootstrapping the runtime then just record this
       // frame for now.

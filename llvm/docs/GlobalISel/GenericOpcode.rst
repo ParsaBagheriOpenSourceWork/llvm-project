@@ -405,8 +405,8 @@ normal input. Also produce a carry output in addition to the normal result.
 G_UMULH, G_SMULH
 ^^^^^^^^^^^^^^^^
 
-Multiply two numbers at twice the incoming bit width (signed) and return
-the high half of the result.
+Multiply two numbers at twice the incoming bit width (unsigned or signed) and
+return the high half of the result.
 
 .. code-block:: none
 
@@ -811,9 +811,9 @@ Indirect branch to jump table entry
 G_JUMP_TABLE
 ^^^^^^^^^^^^
 
-Generates a pointer to the address of the jump table specified by the source 
+Generates a pointer to the address of the jump table specified by the source
 operand. The source operand is a jump table index.
-G_JUMP_TABLE can be used in conjunction with G_BRJT to support jump table 
+G_JUMP_TABLE can be used in conjunction with G_BRJT to support jump table
 codegen with GlobalISel.
 
 .. code-block:: none

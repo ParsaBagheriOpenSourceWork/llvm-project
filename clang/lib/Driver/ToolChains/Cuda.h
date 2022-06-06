@@ -124,6 +124,11 @@ class LLVM_LIBRARY_VISIBILITY OpenMPLinker : public Tool {
                      const char *LinkingOutput) const override;
 };
 
+void getNVPTXTargetFeatures(const Driver &D, const llvm::Triple &Triple,
+                            const llvm::opt::ArgList &Args,
+                            std::vector<StringRef> &Features,
+                            Optional<clang::CudaVersion> Version = None);
+
 } // end namespace NVPTX
 } // end namespace tools
 
@@ -157,7 +162,9 @@ public:
   bool useIntegratedAs() const override { return false; }
   bool isCrossCompiling() const override { return true; }
   bool isPICDefault() const override { return false; }
-  bool isPIEDefault() const override { return false; }
+  bool isPIEDefault(const llvm::opt::ArgList &Args) const override {
+    return false;
+  }
   bool isPICDefaultForced() const override { return false; }
   bool SupportsProfiling() const override { return false; }
   bool supportsDebugInfoOption(const llvm::opt::Arg *A) const override;

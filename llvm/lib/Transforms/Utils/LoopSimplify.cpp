@@ -40,8 +40,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Transforms/Utils/LoopSimplify.h"
-#include "llvm/ADT/DepthFirstIterator.h"
-#include "llvm/ADT/SetOperations.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
@@ -59,14 +57,11 @@
 #include "llvm/Analysis/ScalarEvolutionAliasAnalysis.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Constants.h"
-#include "llvm/IR/DataLayout.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Instructions.h"
-#include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
-#include "llvm/IR/Type.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
@@ -293,9 +288,8 @@ static Loop *separateNestedLoop(Loop *L, BasicBlock *Preheader,
   // L is now a subloop of our outer loop.
   NewOuter->addChildLoop(L);
 
-  for (Loop::block_iterator I = L->block_begin(), E = L->block_end();
-       I != E; ++I)
-    NewOuter->addBlockEntry(*I);
+  for (BasicBlock *BB : L->blocks())
+    NewOuter->addBlockEntry(BB);
 
   // Now reset the header in L, which had been moved by
   // SplitBlockPredecessors for the outer loop.
@@ -496,12 +490,12 @@ ReprocessLoop:
   // predecessors that are not in the loop.  This is not valid for natural
   // loops, but can occur if the blocks are unreachable.  Since they are
   // unreachable we can just shamelessly delete those CFG edges!
-  for (Loop::block_iterator BB = L->block_begin(), E = L->block_end();
-       BB != E; ++BB) {
-    if (*BB == L->getHeader()) continue;
+  for (BasicBlock *BB : L->blocks()) {
+    if (BB == L->getHeader())
+      continue;
 
     SmallPtrSet<BasicBlock*, 4> BadPreds;
-    for (BasicBlock *P : predecessors(*BB))
+    for (BasicBlock *P : predecessors(BB))
       if (!L->contains(P))
         BadPreds.insert(P);
 

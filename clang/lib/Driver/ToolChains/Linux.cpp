@@ -206,7 +206,7 @@ Linux::Linux(const Driver &D, const llvm::Triple &Triple, const ArgList &Args)
     ExtraOpts.push_back("max-page-size=4096");
   }
 
-  if (GCCInstallation.getParentLibPath().find("opt/rh/") != StringRef::npos)
+  if (GCCInstallation.getParentLibPath().contains("opt/rh/"))
     // With devtoolset on RHEL, we want to add a bin directory that is relative
     // to the detected gcc install, because if we are using devtoolset gcc then
     // we want to use other tools from devtoolset (e.g. ld) instead of the
@@ -221,8 +221,12 @@ Linux::Linux(const Driver &D, const llvm::Triple &Triple, const ArgList &Args)
   const bool IsMips = Triple.isMIPS();
   const bool IsHexagon = Arch == llvm::Triple::hexagon;
   const bool IsRISCV = Triple.isRISCV();
+  const bool IsCSKY = Triple.isCSKY();
 
-  if (IsMips && !SysRoot.empty())
+  if (IsCSKY)
+    SysRoot = SysRoot + SelectedMultilib.osSuffix();
+
+  if ((IsMips || IsCSKY) && !SysRoot.empty())
     ExtraOpts.push_back("--sysroot=" + SysRoot);
 
   // Do not use 'gnu' hash style for Mips targets because .gnu.hash
@@ -261,6 +265,13 @@ Linux::Linux(const Driver &D, const llvm::Triple &Triple, const ArgList &Args)
   const std::string OSLibDir = std::string(getOSLibDir(Triple, Args));
   const std::string MultiarchTriple = getMultiarchTriple(D, Triple, SysRoot);
 
+  // mips32: Debian multilib, we use /libo32, while in other case, /lib is
+  // used. We need add both libo32 and /lib.
+  if (Arch == llvm::Triple::mips || Arch == llvm::Triple::mipsel) {
+    Generic_GCC::AddMultilibPaths(D, SysRoot, "libo32", MultiarchTriple, Paths);
+    addPathIfExists(D, SysRoot + "/libo32", Paths);
+    addPathIfExists(D, SysRoot + "/usr/libo32", Paths);
+  }
   Generic_GCC::AddMultilibPaths(D, SysRoot, OSLibDir, MultiarchTriple, Paths);
 
   addPathIfExists(D, SysRoot + "/lib/" + MultiarchTriple, Paths);
@@ -270,14 +281,11 @@ Linux::Linux(const Driver &D, const llvm::Triple &Triple, const ArgList &Args)
     // Android sysroots contain a library directory for each supported OS
     // version as well as some unversioned libraries in the usual multiarch
     // directory.
-    unsigned Major;
-    unsigned Minor;
-    unsigned Micro;
-    Triple.getEnvironmentVersion(Major, Minor, Micro);
-    addPathIfExists(D,
-                    SysRoot + "/usr/lib/" + MultiarchTriple + "/" +
-                        llvm::to_string(Major),
-                    Paths);
+    addPathIfExists(
+        D,
+        SysRoot + "/usr/lib/" + MultiarchTriple + "/" +
+            llvm::to_string(Triple.getEnvironmentVersion().getMajor()),
+        Paths);
   }
 
   addPathIfExists(D, SysRoot + "/usr/lib/" + MultiarchTriple, Paths);
@@ -297,18 +305,12 @@ Linux::Linux(const Driver &D, const llvm::Triple &Triple, const ArgList &Args)
 
   Generic_GCC::AddMultiarchPaths(D, SysRoot, OSLibDir, Paths);
 
-  // Similar to the logic for GCC above, if we are currently running Clang
-  // inside of the requested system root, add its parent library path to those
-  // searched.
-  // FIXME: It's not clear whether we should use the driver's installed
-  // directory ('Dir' below) or the ResourceDir.
-  if (StringRef(D.Dir).startswith(SysRoot)) {
-    // Even if OSLibDir != "lib", this is needed for Clang in the build
-    // directory (not installed) to find libc++.
+  // The deprecated -DLLVM_ENABLE_PROJECTS=libcxx configuration installs
+  // libc++.so in D.Dir+"/../lib/". Detect this path.
+  // TODO Remove once LLVM_ENABLE_PROJECTS=libcxx is unsupported.
+  if (StringRef(D.Dir).startswith(SysRoot) &&
+      D.getVFS().exists(D.Dir + "/../lib/libc++.so"))
     addPathIfExists(D, D.Dir + "/../lib", Paths);
-    if (OSLibDir != "lib")
-      addPathIfExists(D, D.Dir + "/../" + OSLibDir, Paths);
-  }
 
   addPathIfExists(D, SysRoot + "/lib", Paths);
   addPathIfExists(D, SysRoot + "/usr/lib", Paths);
@@ -318,6 +320,12 @@ ToolChain::RuntimeLibType Linux::GetDefaultRuntimeLibType() const {
   if (getTriple().isAndroid())
     return ToolChain::RLT_CompilerRT;
   return Generic_ELF::GetDefaultRuntimeLibType();
+}
+
+unsigned Linux::GetDefaultDwarfVersion() const {
+  if (getTriple().isAndroid())
+    return 4;
+  return ToolChain::GetDefaultDwarfVersion();
 }
 
 ToolChain::CXXStdlibType Linux::GetDefaultCXXStdlibType() const {
@@ -349,6 +357,21 @@ std::string Linux::computeSysRoot() const {
     std::string AndroidSysRootPath = (ClangDir + "/../sysroot").str();
     if (getVFS().exists(AndroidSysRootPath))
       return AndroidSysRootPath;
+  }
+
+  if (getTriple().isCSKY()) {
+    // CSKY toolchains use different names for sysroot folder.
+    if (!GCCInstallation.isValid())
+      return std::string();
+    // GCCInstallation.getInstallPath() =
+    //   $GCCToolchainPath/lib/gcc/csky-linux-gnuabiv2/6.3.0
+    // Path = $GCCToolchainPath/csky-linux-gnuabiv2/libc
+    std::string Path = (GCCInstallation.getInstallPath() + "/../../../../" +
+                        GCCInstallation.getTriple().str() + "/libc")
+                           .str();
+    if (getVFS().exists(Path))
+      return Path;
+    return std::string();
   }
 
   if (!GCCInstallation.isValid() || !getTriple().isMIPS())
@@ -414,6 +437,9 @@ std::string Linux::getDynamicLinker(const ArgList &Args) const {
         (Triple.getEnvironment() == llvm::Triple::MuslEABIHF ||
          tools::arm::getARMFloatABI(*this, Args) == tools::arm::FloatABI::Hard))
       ArchName += "hf";
+    if (Arch == llvm::Triple::ppc &&
+        Triple.getSubArch() == llvm::Triple::PPCSubArch_spe)
+      ArchName = "powerpc-sf";
 
     return "/lib/ld-musl-" + ArchName + ".so.1";
   }
@@ -524,6 +550,11 @@ std::string Linux::getDynamicLinker(const ArgList &Args) const {
   }
   case llvm::Triple::ve:
     return "/opt/nec/ve/lib/ld-linux-ve.so.1";
+  case llvm::Triple::csky: {
+    LibDir = "lib";
+    Loader = "ld.so.1";
+    break;
+  }
   }
 
   if (Distro == Distro::Exherbo &&
@@ -645,6 +676,15 @@ void Linux::AddHIPIncludeArgs(const ArgList &DriverArgs,
   RocmInstallation.AddHIPIncludeArgs(DriverArgs, CC1Args);
 }
 
+void Linux::AddHIPRuntimeLibArgs(const ArgList &Args,
+                                 ArgStringList &CmdArgs) const {
+  CmdArgs.append(
+      {Args.MakeArgString(StringRef("-L") + RocmInstallation.getLibPath()),
+       "-rpath", Args.MakeArgString(RocmInstallation.getLibPath())});
+
+  CmdArgs.push_back("-lamdhip64");
+}
+
 void Linux::AddIAMCUIncludeArgs(const ArgList &DriverArgs,
                                 ArgStringList &CC1Args) const {
   if (GCCInstallation.isValid()) {
@@ -655,9 +695,9 @@ void Linux::AddIAMCUIncludeArgs(const ArgList &DriverArgs,
   }
 }
 
-bool Linux::isPIEDefault() const {
-  return (getTriple().isAndroid() && !getTriple().isAndroidVersionLT(16)) ||
-          getTriple().isMusl() || getSanitizerArgs().requiresPIE();
+bool Linux::isPIEDefault(const llvm::opt::ArgList &Args) const {
+  return CLANG_DEFAULT_PIE_ON_LINUX || getTriple().isAndroid() ||
+         getTriple().isMusl() || getSanitizerArgs(Args).requiresPIE();
 }
 
 bool Linux::IsAArch64OutlineAtomicsDefault(const ArgList &Args) const {
@@ -673,12 +713,8 @@ bool Linux::IsAArch64OutlineAtomicsDefault(const ArgList &Args) const {
   return true;
 }
 
-bool Linux::isNoExecStackDefault() const {
-    return getTriple().isAndroid();
-}
-
 bool Linux::IsMathErrnoDefault() const {
-  if (getTriple().isAndroid())
+  if (getTriple().isAndroid() || getTriple().isMusl())
     return false;
   return Generic_ELF::IsMathErrnoDefault();
 }

@@ -79,10 +79,9 @@ CXXRecordDecl::DefinitionData::DefinitionData(CXXRecordDecl *D)
       HasBasesWithFields(false), HasBasesWithNonStaticDataMembers(false),
       HasPrivateFields(false), HasProtectedFields(false),
       HasPublicFields(false), HasMutableFields(false), HasVariantMembers(false),
-      HasOnlyCMembers(true), HasInClassInitializer(false),
+      HasOnlyCMembers(true), HasInitMethod(false), HasInClassInitializer(false),
       HasUninitializedReferenceMember(false), HasUninitializedFields(false),
-      HasInheritedConstructor(false),
-      HasInheritedDefaultConstructor(false),
+      HasInheritedConstructor(false), HasInheritedDefaultConstructor(false),
       HasInheritedAssignment(false),
       NeedOverloadResolutionForCopyConstructor(false),
       NeedOverloadResolutionForMoveConstructor(false),
@@ -147,16 +146,16 @@ CXXRecordDecl *CXXRecordDecl::Create(const ASTContext &C, TagKind TK,
 CXXRecordDecl *
 CXXRecordDecl::CreateLambda(const ASTContext &C, DeclContext *DC,
                             TypeSourceInfo *Info, SourceLocation Loc,
-                            bool Dependent, bool IsGeneric,
+                            unsigned DependencyKind, bool IsGeneric,
                             LambdaCaptureDefault CaptureDefault) {
   auto *R = new (C, DC) CXXRecordDecl(CXXRecord, TTK_Class, C, DC, Loc, Loc,
                                       nullptr, nullptr);
   R->setBeingDefined(true);
-  R->DefinitionData =
-      new (C) struct LambdaDefinitionData(R, Info, Dependent, IsGeneric,
-                                          CaptureDefault);
+  R->DefinitionData = new (C) struct LambdaDefinitionData(
+      R, Info, DependencyKind, IsGeneric, CaptureDefault);
   R->setMayHaveOutOfDateDef(false);
   R->setImplicit(true);
+
   C.getTypeDeclType(R, /*PrevDecl=*/nullptr);
   return R;
 }
@@ -178,6 +177,8 @@ static bool hasRepeatedBaseClass(const CXXRecordDecl *StartRD) {
   SmallVector<const CXXRecordDecl*, 8> WorkList = {StartRD};
   while (!WorkList.empty()) {
     const CXXRecordDecl *RD = WorkList.pop_back_val();
+    if (RD->getTypeForDecl()->isDependentType())
+      continue;
     for (const CXXBaseSpecifier &BaseSpec : RD->bases()) {
       if (const CXXRecordDecl *B = BaseSpec.getType()->getAsCXXRecordDecl()) {
         if (!SeenBaseTypes.insert(B).second)
@@ -1776,7 +1777,7 @@ void CXXRecordDecl::removeConversion(const NamedDecl *ConvDecl) {
   for (unsigned I = 0, E = Convs.size(); I != E; ++I) {
     if (Convs[I].getDecl() == ConvDecl) {
       Convs.erase(I);
-      assert(llvm::find(Convs, ConvDecl) == Convs.end() &&
+      assert(!llvm::is_contained(Convs, ConvDecl) &&
              "conversion was found multiple times in unresolved set");
       return;
     }
@@ -2156,12 +2157,9 @@ CXXMethodDecl::getCorrespondingMethodInClass(const CXXRecordDecl *RD,
     }
 
     // Other candidate final overriders might be overridden by this function.
-    FinalOverriders.erase(
-        std::remove_if(FinalOverriders.begin(), FinalOverriders.end(),
-                       [&](CXXMethodDecl *OtherD) {
-                         return recursivelyOverrides(D, OtherD);
-                       }),
-        FinalOverriders.end());
+    llvm::erase_if(FinalOverriders, [&](CXXMethodDecl *OtherD) {
+      return recursivelyOverrides(D, OtherD);
+    });
 
     FinalOverriders.push_back(D);
   };
@@ -2970,8 +2968,10 @@ UsingShadowDecl::UsingShadowDecl(Kind K, ASTContext &C, DeclContext *DC,
                                  BaseUsingDecl *Introducer, NamedDecl *Target)
     : NamedDecl(K, DC, Loc, Name), redeclarable_base(C),
       UsingOrNextShadow(Introducer) {
-  if (Target)
+  if (Target) {
+    assert(!isa<UsingShadowDecl>(Target));
     setTargetDecl(Target);
+  }
   setImplicit();
 }
 
@@ -3014,8 +3014,7 @@ CXXRecordDecl *ConstructorUsingShadowDecl::getNominatedBaseClass() const {
 void BaseUsingDecl::anchor() {}
 
 void BaseUsingDecl::addShadowDecl(UsingShadowDecl *S) {
-  assert(std::find(shadow_begin(), shadow_end(), S) == shadow_end() &&
-         "declaration already in set");
+  assert(!llvm::is_contained(shadows(), S) && "declaration already in set");
   assert(S->getIntroducer() == this);
 
   if (FirstUsingShadow.getPointer())
@@ -3024,8 +3023,7 @@ void BaseUsingDecl::addShadowDecl(UsingShadowDecl *S) {
 }
 
 void BaseUsingDecl::removeShadowDecl(UsingShadowDecl *S) {
-  assert(std::find(shadow_begin(), shadow_end(), S) != shadow_end() &&
-         "declaration not in set");
+  assert(llvm::is_contained(shadows(), S) && "declaration not in set");
   assert(S->getIntroducer() == this);
 
   // Remove S from the shadow decl chain. This is O(n) but hopefully rare.
@@ -3275,7 +3273,7 @@ void MSGuidDecl::anchor() {}
 
 MSGuidDecl::MSGuidDecl(DeclContext *DC, QualType T, Parts P)
     : ValueDecl(Decl::MSGuid, DC, SourceLocation(), DeclarationName(), T),
-      PartVal(P), APVal() {}
+      PartVal(P) {}
 
 MSGuidDecl *MSGuidDecl::Create(const ASTContext &C, QualType T, Parts P) {
   DeclContext *DC = C.getTranslationUnitDecl();
@@ -3365,6 +3363,38 @@ APValue &MSGuidDecl::getAsAPValue() const {
   }
 
   return APVal;
+}
+
+void UnnamedGlobalConstantDecl::anchor() {}
+
+UnnamedGlobalConstantDecl::UnnamedGlobalConstantDecl(const ASTContext &C,
+                                                     DeclContext *DC,
+                                                     QualType Ty,
+                                                     const APValue &Val)
+    : ValueDecl(Decl::UnnamedGlobalConstant, DC, SourceLocation(),
+                DeclarationName(), Ty),
+      Value(Val) {
+  // Cleanup the embedded APValue if required (note that our destructor is never
+  // run)
+  if (Value.needsCleanup())
+    C.addDestruction(&Value);
+}
+
+UnnamedGlobalConstantDecl *
+UnnamedGlobalConstantDecl::Create(const ASTContext &C, QualType T,
+                                  const APValue &Value) {
+  DeclContext *DC = C.getTranslationUnitDecl();
+  return new (C, DC) UnnamedGlobalConstantDecl(C, DC, T, Value);
+}
+
+UnnamedGlobalConstantDecl *
+UnnamedGlobalConstantDecl::CreateDeserialized(ASTContext &C, unsigned ID) {
+  return new (C, ID)
+      UnnamedGlobalConstantDecl(C, nullptr, QualType(), APValue());
+}
+
+void UnnamedGlobalConstantDecl::printName(llvm::raw_ostream &OS) const {
+  OS << "unnamed-global-constant";
 }
 
 static const char *getAccessName(AccessSpecifier AS) {

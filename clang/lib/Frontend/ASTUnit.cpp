@@ -817,7 +817,7 @@ std::unique_ptr<ASTUnit> ASTUnit::LoadFromASTFile(
   AST->Reader = new ASTReader(
       PP, *AST->ModuleCache, AST->Ctx.get(), PCHContainerRdr, {},
       /*isysroot=*/"",
-      /*DisableValidation=*/disableValid, AllowASTWithCompilerErrors);
+      /*DisableValidationKind=*/disableValid, AllowASTWithCompilerErrors);
 
   AST->Reader->setListener(std::make_unique<ASTInfoCollector>(
       *AST->PP, AST->Ctx.get(), *AST->HSOpts, *AST->PPOpts, *AST->LangOpts,
@@ -1069,9 +1069,7 @@ static void
 checkAndRemoveNonDriverDiags(SmallVectorImpl<StoredDiagnostic> &StoredDiags) {
   // Get rid of stored diagnostics except the ones from the driver which do not
   // have a source location.
-  StoredDiags.erase(
-      std::remove_if(StoredDiags.begin(), StoredDiags.end(), isNonDriverDiag),
-      StoredDiags.end());
+  llvm::erase_if(StoredDiags, isNonDriverDiag);
 }
 
 static void checkAndSanitizeDiags(SmallVectorImpl<StoredDiagnostic> &
@@ -1731,8 +1729,12 @@ ASTUnit *ASTUnit::LoadFromCommandLine(
     CaptureDroppedDiagnostics Capture(CaptureDiagnostics, *Diags,
                                       &StoredDiagnostics, nullptr);
 
-    CI = createInvocationFromCommandLine(
-        llvm::makeArrayRef(ArgBegin, ArgEnd), Diags, VFS);
+    CreateInvocationOptions CIOpts;
+    CIOpts.VFS = VFS;
+    CIOpts.Diags = Diags;
+    CIOpts.ProbePrecompiled = true; // FIXME: historical default. Needed?
+    CI = createInvocation(llvm::makeArrayRef(ArgBegin, ArgEnd),
+                          std::move(CIOpts));
     if (!CI)
       return nullptr;
   }
@@ -1924,9 +1926,10 @@ namespace {
     void ProcessOverloadCandidates(Sema &S, unsigned CurrentArg,
                                    OverloadCandidate *Candidates,
                                    unsigned NumCandidates,
-                                   SourceLocation OpenParLoc) override {
+                                   SourceLocation OpenParLoc,
+                                   bool Braced) override {
       Next.ProcessOverloadCandidates(S, CurrentArg, Candidates, NumCandidates,
-                                     OpenParLoc);
+                                     OpenParLoc, Braced);
     }
 
     CodeCompletionAllocator &getAllocator() override {

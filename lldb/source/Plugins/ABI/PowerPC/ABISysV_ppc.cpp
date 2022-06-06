@@ -25,6 +25,7 @@
 #include "lldb/Target/Thread.h"
 #include "lldb/Utility/ConstString.h"
 #include "lldb/Utility/DataExtractor.h"
+#include "lldb/Utility/LLDBLog.h"
 #include "lldb/Utility/Log.h"
 #include "lldb/Utility/RegisterValue.h"
 #include "lldb/Utility/Status.h"
@@ -112,7 +113,7 @@ enum dwarf_regnums {
 #define DEFINE_GPR(reg, alt, kind1, kind2, kind3, kind4)                       \
   {                                                                            \
     #reg, alt, 8, 0, eEncodingUint, eFormatHex, {kind1, kind2, kind3, kind4 }, \
-                                                 nullptr, nullptr, nullptr, 0  \
+                                                 nullptr, nullptr,             \
   }
 
 static const RegisterInfo g_register_infos[] = {
@@ -201,8 +202,7 @@ static const RegisterInfo g_register_infos[] = {
      {dwarf_cfa, dwarf_cfa, LLDB_INVALID_REGNUM, LLDB_INVALID_REGNUM},
      nullptr,
      nullptr,
-     nullptr,
-     0}};
+     }};
 
 static const uint32_t k_num_register_infos =
     llvm::array_lengthof(g_register_infos);
@@ -229,7 +229,7 @@ ABISysV_ppc::CreateInstance(lldb::ProcessSP process_sp, const ArchSpec &arch) {
 bool ABISysV_ppc::PrepareTrivialCall(Thread &thread, addr_t sp,
                                      addr_t func_addr, addr_t return_addr,
                                      llvm::ArrayRef<addr_t> args) const {
-  Log *log(lldb_private::GetLogIfAllCategoriesSet(LIBLLDB_LOG_EXPRESSIONS));
+  Log *log = GetLog(LLDBLog::Expressions);
 
   if (log) {
     StreamString s;
@@ -666,7 +666,7 @@ ValueObjectSP ABISysV_ppc::GetReturnValueObjectImpl(
     bool is_memory = true;
     if (*bit_width <= 128) {
       ByteOrder target_byte_order = target->GetArchitecture().GetByteOrder();
-      DataBufferSP data_sp(new DataBufferHeap(16, 0));
+      WritableDataBufferSP data_sp(new DataBufferHeap(16, 0));
       DataExtractor return_ext(data_sp, target_byte_order,
                                target->GetArchitecture().GetAddressByteSize());
 
@@ -962,15 +962,4 @@ void ABISysV_ppc::Initialize() {
 
 void ABISysV_ppc::Terminate() {
   PluginManager::UnregisterPlugin(CreateInstance);
-}
-
-lldb_private::ConstString ABISysV_ppc::GetPluginNameStatic() {
-  static ConstString g_name("sysv-ppc");
-  return g_name;
-}
-
-// PluginInterface protocol
-
-lldb_private::ConstString ABISysV_ppc::GetPluginName() {
-  return GetPluginNameStatic();
 }

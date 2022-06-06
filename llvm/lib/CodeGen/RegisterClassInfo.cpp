@@ -19,7 +19,6 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
-#include "llvm/CodeGen/TargetFrameLowering.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/MC/MCRegisterInfo.h"
@@ -109,8 +108,7 @@ void RegisterClassInfo::compute(const TargetRegisterClass *RC) const {
   // FIXME: Once targets reserve registers instead of removing them from the
   // allocation order, we can simply use begin/end here.
   ArrayRef<MCPhysReg> RawOrder = RC->getRawAllocationOrder(*MF);
-  for (unsigned i = 0; i != RawOrder.size(); ++i) {
-    unsigned PhysReg = RawOrder[i];
+  for (unsigned PhysReg : RawOrder) {
     // Remove reserved registers from the allocation order.
     if (Reserved.test(PhysReg))
       continue;

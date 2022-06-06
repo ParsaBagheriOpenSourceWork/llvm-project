@@ -25,6 +25,7 @@
 #include "lldb/Target/Thread.h"
 #include "lldb/Utility/ConstString.h"
 #include "lldb/Utility/DataExtractor.h"
+#include "lldb/Utility/LLDBLog.h"
 #include "lldb/Utility/Log.h"
 #include "lldb/Utility/RegisterValue.h"
 #include "lldb/Utility/Status.h"
@@ -115,7 +116,7 @@ enum dwarf_regnums {
     #name, alt, size, 0, eEncodingUint, eFormatHex,                            \
         {dwarf_##name##_s390x, dwarf_##name##_s390x, generic,                  \
          LLDB_INVALID_REGNUM, LLDB_INVALID_REGNUM },                           \
-         nullptr, nullptr, nullptr, 0                                          \
+         nullptr, nullptr,                                                     \
   }
 
 static const RegisterInfo g_register_infos[] = {
@@ -195,7 +196,7 @@ ABISysV_s390x::CreateInstance(lldb::ProcessSP process_sp, const ArchSpec &arch) 
 bool ABISysV_s390x::PrepareTrivialCall(Thread &thread, addr_t sp,
                                        addr_t func_addr, addr_t return_addr,
                                        llvm::ArrayRef<addr_t> args) const {
-  Log *log(lldb_private::GetLogIfAllCategoriesSet(LIBLLDB_LOG_EXPRESSIONS));
+  Log *log = GetLog(LLDBLog::Expressions);
 
   if (log) {
     StreamString s;
@@ -715,15 +716,4 @@ void ABISysV_s390x::Initialize() {
 
 void ABISysV_s390x::Terminate() {
   PluginManager::UnregisterPlugin(CreateInstance);
-}
-
-lldb_private::ConstString ABISysV_s390x::GetPluginNameStatic() {
-  static ConstString g_name("sysv-s390x");
-  return g_name;
-}
-
-// PluginInterface protocol
-
-lldb_private::ConstString ABISysV_s390x::GetPluginName() {
-  return GetPluginNameStatic();
 }

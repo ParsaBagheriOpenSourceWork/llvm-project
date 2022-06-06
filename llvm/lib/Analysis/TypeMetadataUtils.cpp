@@ -16,7 +16,6 @@
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
-#include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/Module.h"
 
 using namespace llvm;
@@ -196,4 +195,21 @@ Constant *llvm::getPointerAtOffset(Constant *I, uint64_t Offset, Module &M,
     }
   }
   return nullptr;
+}
+
+void llvm::replaceRelativePointerUsersWithZero(Function *F) {
+  for (auto *U : F->users()) {
+    auto *PtrExpr = dyn_cast<ConstantExpr>(U);
+    if (!PtrExpr || PtrExpr->getOpcode() != Instruction::PtrToInt)
+      continue;
+
+    for (auto *PtrToIntUser : PtrExpr->users()) {
+      auto *SubExpr = dyn_cast<ConstantExpr>(PtrToIntUser);
+      if (!SubExpr || SubExpr->getOpcode() != Instruction::Sub)
+        continue;
+
+      SubExpr->replaceNonMetadataUsesWith(
+          ConstantInt::get(SubExpr->getType(), 0));
+    }
+  }
 }

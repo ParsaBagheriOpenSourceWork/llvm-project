@@ -239,12 +239,10 @@ class SettingsCommandTestCase(TestBase):
                     substrs=["5ah"])
 
     @skipIfDarwinEmbedded   # <rdar://problem/34446098> debugserver on ios etc can't write files
-    @skipIfReproducer
     def test_run_args_and_env_vars(self):
         self.do_test_run_args_and_env_vars(use_launchsimple=False)
 
     @skipIfDarwinEmbedded   # <rdar://problem/34446098> debugserver on ios etc can't write files
-    @skipIfReproducer
     def test_launchsimple_args_and_env_vars(self):
         self.do_test_run_args_and_env_vars(use_launchsimple=True)
 
@@ -329,7 +327,6 @@ class SettingsCommandTestCase(TestBase):
                 "Environment variable 'MY_ENV_VAR' successfully passed."])
 
     @skipIfRemote  # it doesn't make sense to send host env to remote target
-    @skipIfReproducer
     def test_pass_host_env_vars(self):
         """Test that the host env vars are passed to the launched process."""
         self.build()
@@ -426,7 +423,6 @@ class SettingsCommandTestCase(TestBase):
                 "The host environment variable 'MY_HOST_ENV_VAR2' successfully passed."])
 
     @skipIfDarwinEmbedded   # <rdar://problem/34446098> debugserver on ios etc can't write files
-    @skipIfReproducer
     def test_set_error_output_path(self):
         """Test that setting target.error/output-path for the launched process works."""
         self.build()
@@ -783,3 +779,13 @@ class SettingsCommandTestCase(TestBase):
         # finally, confirm that trying to set a setting that does not exist still fails.
         # (SHOWING a setting that does not exist does not currently yield an error.)
         self.expect('settings set target.setting-which-does-not-exist true', error=True)
+
+    def test_settings_set_exists(self):
+        cmdinterp = self.dbg.GetCommandInterpreter()
+
+        # An unknown option should succeed.
+        self.expect('settings set -e foo bar')
+        self.expect('settings set --exists foo bar')
+
+        # A known option should fail if its argument is invalid.
+        self.expect("settings set auto-confirm bogus", error=True)

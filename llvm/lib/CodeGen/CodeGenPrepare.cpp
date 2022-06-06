@@ -23,10 +23,8 @@
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/BlockFrequencyInfo.h"
 #include "llvm/Analysis/BranchProbabilityInfo.h"
-#include "llvm/Analysis/ConstantFolding.h"
 #include "llvm/Analysis/InstructionSimplify.h"
 #include "llvm/Analysis/LoopInfo.h"
-#include "llvm/Analysis/MemoryBuiltins.h"
 #include "llvm/Analysis/ProfileSummaryInfo.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
@@ -401,6 +399,8 @@ class TypePromotionTransaction;
     bool optimizeFunnelShift(IntrinsicInst *Fsh);
     bool optimizeSelectInst(SelectInst *SI);
     bool optimizeShuffleVectorInst(ShuffleVectorInst *SVI);
+    bool optimizeSwitchType(SwitchInst *SI);
+    bool optimizeSwitchPhiConstants(SwitchInst *SI);
     bool optimizeSwitchInst(SwitchInst *SI);
     bool optimizeExtractElementInst(Instruction *Inst);
     bool dupRetToEnableTailCallOpts(BasicBlock *BB, bool &ModifiedDT);
@@ -524,7 +524,8 @@ bool CodeGenPrepare::runOnFunction(Function &F) {
 
   // Split some critical edges where one of the sources is an indirect branch,
   // to help generate sane code for PHIs involving such edges.
-  EverMadeChange |= SplitIndirectBrCriticalEdges(F);
+  EverMadeChange |=
+      SplitIndirectBrCriticalEdges(F, /*IgnoreBlocksWithoutPHI=*/true);
 
   bool MadeChange = true;
   while (MadeChange) {
@@ -659,12 +660,8 @@ void CodeGenPrepare::removeAllAssertingVHReferences(Value *V) {
     return;
 
   auto &GEPVector = VecI->second;
-  const auto &I =
-      llvm::find_if(GEPVector, [=](auto &Elt) { return Elt.first == GEP; });
-  if (I == GEPVector.end())
-    return;
+  llvm::erase_if(GEPVector, [=](auto &Elt) { return Elt.first == GEP; });
 
-  GEPVector.erase(I);
   if (GEPVector.empty())
     LargeOffsetGEPMap.erase(VecI);
 }
@@ -2036,12 +2033,13 @@ static bool despeculateCountZeros(IntrinsicInst *CountZeros,
 
   // Only handle legal scalar cases. Anything else requires too much work.
   Type *Ty = CountZeros->getType();
-  unsigned SizeInBits = Ty->getPrimitiveSizeInBits();
+  unsigned SizeInBits = Ty->getScalarSizeInBits();
   if (Ty->isVectorTy() || SizeInBits > DL->getLargestLegalIntTypeSizeInBits())
     return false;
 
   // Bail if the value is never zero.
-  if (llvm::isKnownNonZero(CountZeros->getOperand(0), *DL))
+  Value *Op = CountZeros->getOperand(0);
+  if (isKnownNonZero(Op, *DL))
     return false;
 
   // The intrinsic will be sunk behind a compare against zero and branch.
@@ -2062,7 +2060,10 @@ static bool despeculateCountZeros(IntrinsicInst *CountZeros,
   // Replace the unconditional branch that was created by the first split with
   // a compare against zero and a conditional branch.
   Value *Zero = Constant::getNullValue(Ty);
-  Value *Cmp = Builder.CreateICmpEQ(CountZeros->getOperand(0), Zero, "cmpz");
+  // Avoid introducing branch on poison.
+  if (!isGuaranteedNotToBeUndefOrPoison(Op))
+    Op = Builder.CreateFreeze(Op, Op->getName() + ".fr");
+  Value *Cmp = Builder.CreateICmpEQ(Op, Zero, "cmpz");
   Builder.CreateCondBr(Cmp, EndBlock, CallBlock);
   StartBlock->getTerminator()->eraseFromParent();
 
@@ -2107,7 +2108,7 @@ bool CodeGenPrepare::optimizeCallInst(CallInst *CI, bool &ModifiedDT) {
   // idea
   unsigned MinSize, PrefAlign;
   if (TLI->shouldAlignPointerArgs(CI, MinSize, PrefAlign)) {
-    for (auto &Arg : CI->arg_operands()) {
+    for (auto &Arg : CI->args()) {
       // We want to align both objects whose address is used directly and
       // objects whose address is used in casts and GEPs, though it only makes
       // sense for GEPs if the offset is a multiple of the desired alignment and
@@ -2158,7 +2159,7 @@ bool CodeGenPrepare::optimizeCallInst(CallInst *CI, bool &ModifiedDT) {
   // into their uses.  TODO: generalize this to work over profiling data
   if (CI->hasFnAttr(Attribute::Cold) &&
       !OptSize && !llvm::shouldOptimizeForSize(BB, PSI, BFI.get()))
-    for (auto &Arg : CI->arg_operands()) {
+    for (auto &Arg : CI->args()) {
       if (!Arg->getType()->isPointerTy())
         continue;
       unsigned AS = Arg->getType()->getPointerAddressSpace();
@@ -3450,7 +3451,7 @@ private:
   bool AllAddrModesTrivial = true;
 
   /// Common Type for all different fields in addressing modes.
-  Type *CommonType;
+  Type *CommonType = nullptr;
 
   /// SimplifyQuery for simplifyInstruction utility.
   const SimplifyQuery &SQ;
@@ -3460,7 +3461,7 @@ private:
 
 public:
   AddressingModeCombiner(const SimplifyQuery &_SQ, Value *OriginalValue)
-      : CommonType(nullptr), SQ(_SQ), Original(OriginalValue) {}
+      : SQ(_SQ), Original(OriginalValue) {}
 
   /// Get the combined AddrMode
   const ExtAddrMode &getAddrMode() const {
@@ -4172,11 +4173,11 @@ bool TypePromotionHelper::canGetThrough(const Instruction *Inst,
 
   // We can get through binary operator, if it is legal. In other words, the
   // binary operator must have a nuw or nsw flag.
-  const BinaryOperator *BinOp = dyn_cast<BinaryOperator>(Inst);
-  if (isa_and_nonnull<OverflowingBinaryOperator>(BinOp) &&
-      ((!IsSExt && BinOp->hasNoUnsignedWrap()) ||
-       (IsSExt && BinOp->hasNoSignedWrap())))
-    return true;
+  if (const auto *BinOp = dyn_cast<BinaryOperator>(Inst))
+    if (isa<OverflowingBinaryOperator>(BinOp) &&
+        ((!IsSExt && BinOp->hasNoUnsignedWrap()) ||
+         (IsSExt && BinOp->hasNoSignedWrap())))
+      return true;
 
   // ext(and(opnd, cst)) --> and(ext(opnd), ext(cst))
   if ((Inst->getOpcode() == Instruction::And ||
@@ -4185,10 +4186,10 @@ bool TypePromotionHelper::canGetThrough(const Instruction *Inst,
 
   // ext(xor(opnd, cst)) --> xor(ext(opnd), ext(cst))
   if (Inst->getOpcode() == Instruction::Xor) {
-    const ConstantInt *Cst = dyn_cast<ConstantInt>(Inst->getOperand(1));
     // Make sure it is not a NOT.
-    if (Cst && !Cst->getValue().isAllOnesValue())
-      return true;
+    if (const auto *Cst = dyn_cast<ConstantInt>(Inst->getOperand(1)))
+      if (!Cst->getValue().isAllOnes())
+        return true;
   }
 
   // zext(shrl(opnd, cst)) --> shrl(zext(opnd), zext(cst))
@@ -4554,9 +4555,9 @@ bool AddressingModeMatcher::matchOperationAddr(User *AddrInst, unsigned Opcode,
     ConstantInt *RHS = dyn_cast<ConstantInt>(AddrInst->getOperand(1));
     if (!RHS || RHS->getBitWidth() > 64)
       return false;
-    int64_t Scale = RHS->getSExtValue();
-    if (Opcode == Instruction::Shl)
-      Scale = 1LL << Scale;
+    int64_t Scale = Opcode == Instruction::Shl
+                        ? 1LL << RHS->getLimitedValue(RHS->getBitWidth() - 1)
+                        : RHS->getSExtValue();
 
     return matchScaledValue(AddrInst->getOperand(0), Scale, Depth);
   }
@@ -4835,14 +4836,12 @@ static bool IsOperandAMemoryOperand(CallInst *CI, InlineAsm *IA, Value *OpVal,
   TargetLowering::AsmOperandInfoVector TargetConstraints =
       TLI.ParseConstraints(F->getParent()->getDataLayout(), &TRI, *CI);
 
-  for (unsigned i = 0, e = TargetConstraints.size(); i != e; ++i) {
-    TargetLowering::AsmOperandInfo &OpInfo = TargetConstraints[i];
-
+  for (TargetLowering::AsmOperandInfo &OpInfo : TargetConstraints) {
     // Compute the constraint code and ConstraintType to use.
     TLI.ComputeConstraintToUse(OpInfo, SDValue());
 
     // If this asm operand is our Value*, and if it isn't an indirect memory
-    // operand, we can't fold it!
+    // operand, we can't fold it!  TODO: Also handle C_Address?
     if (OpInfo.CallOperandVal == OpVal &&
         (OpInfo.ConstraintType != TargetLowering::C_Memory ||
          !OpInfo.isIndirect))
@@ -5329,11 +5328,8 @@ bool CodeGenPrepare::optimizeMemoryInst(Instruction *MemoryInst, Value *Addr,
           // SDAG consecutive load/store merging.
           if (ResultPtr->getType() != I8PtrTy)
             ResultPtr = Builder.CreatePointerCast(ResultPtr, I8PtrTy);
-          ResultPtr =
-              AddrMode.InBounds
-                  ? Builder.CreateInBoundsGEP(I8Ty, ResultPtr, ResultIndex,
-                                              "sunkaddr")
-                  : Builder.CreateGEP(I8Ty, ResultPtr, ResultIndex, "sunkaddr");
+          ResultPtr = Builder.CreateGEP(I8Ty, ResultPtr, ResultIndex,
+                                        "sunkaddr", AddrMode.InBounds);
         }
 
         ResultIndex = V;
@@ -5344,11 +5340,8 @@ bool CodeGenPrepare::optimizeMemoryInst(Instruction *MemoryInst, Value *Addr,
       } else {
         if (ResultPtr->getType() != I8PtrTy)
           ResultPtr = Builder.CreatePointerCast(ResultPtr, I8PtrTy);
-        SunkAddr =
-            AddrMode.InBounds
-                ? Builder.CreateInBoundsGEP(I8Ty, ResultPtr, ResultIndex,
-                                            "sunkaddr")
-                : Builder.CreateGEP(I8Ty, ResultPtr, ResultIndex, "sunkaddr");
+        SunkAddr = Builder.CreateGEP(I8Ty, ResultPtr, ResultIndex, "sunkaddr",
+                                     AddrMode.InBounds);
       }
 
       if (SunkAddr->getType() != Addr->getType())
@@ -5621,12 +5614,11 @@ bool CodeGenPrepare::optimizeInlineAsmInst(CallInst *CS) {
   TargetLowering::AsmOperandInfoVector TargetConstraints =
       TLI->ParseConstraints(*DL, TRI, *CS);
   unsigned ArgNo = 0;
-  for (unsigned i = 0, e = TargetConstraints.size(); i != e; ++i) {
-    TargetLowering::AsmOperandInfo &OpInfo = TargetConstraints[i];
-
+  for (TargetLowering::AsmOperandInfo &OpInfo : TargetConstraints) {
     // Compute the constraint code and ConstraintType to use.
     TLI->ComputeConstraintToUse(OpInfo, SDValue());
 
+    // TODO: Also handle C_Address?
     if (OpInfo.ConstraintType == TargetLowering::C_Memory &&
         OpInfo.isIndirect) {
       Value *OpVal = CS->getArgOperand(ArgNo++);
@@ -6860,8 +6852,7 @@ bool CodeGenPrepare::optimizeSelectInst(SelectInst *SI) {
   // Use reverse iterator because later select may use the value of the
   // earlier select, and we need to propagate value through earlier select
   // to get the PHI operand.
-  for (auto It = ASI.rbegin(); It != ASI.rend(); ++It) {
-    SelectInst *SI = *It;
+  for (SelectInst *SI : llvm::reverse(ASI)) {
     // The select itself is replaced with a PHI Node.
     PHINode *PN = PHINode::Create(SI->getType(), 2, "", &EndBlock->front());
     PN->takeName(SI);
@@ -6988,12 +6979,12 @@ bool CodeGenPrepare::tryToSinkFreeOperands(Instruction *I) {
   return Changed;
 }
 
-bool CodeGenPrepare::optimizeSwitchInst(SwitchInst *SI) {
+bool CodeGenPrepare::optimizeSwitchType(SwitchInst *SI) {
   Value *Cond = SI->getCondition();
   Type *OldType = Cond->getType();
   LLVMContext &Context = Cond->getContext();
   EVT OldVT = TLI->getValueType(*DL, OldType);
-  MVT RegType = TLI->getRegisterType(Context, OldVT);
+  MVT RegType = TLI->getPreferredSwitchConditionType(Context, OldVT);
   unsigned RegWidth = RegType.getSizeInBits();
 
   if (RegWidth <= cast<IntegerType>(OldType)->getBitWidth())
@@ -7028,7 +7019,7 @@ bool CodeGenPrepare::optimizeSwitchInst(SwitchInst *SI) {
   ExtInst->setDebugLoc(SI->getDebugLoc());
   SI->setCondition(ExtInst);
   for (auto Case : SI->cases()) {
-    APInt NarrowConst = Case.getCaseValue()->getValue();
+    const APInt &NarrowConst = Case.getCaseValue()->getValue();
     APInt WideConst = (ExtType == Instruction::ZExt) ?
                       NarrowConst.zext(RegWidth) : NarrowConst.sext(RegWidth);
     Case.setValue(ConstantInt::get(Context, WideConst));
@@ -7037,6 +7028,89 @@ bool CodeGenPrepare::optimizeSwitchInst(SwitchInst *SI) {
   return true;
 }
 
+bool CodeGenPrepare::optimizeSwitchPhiConstants(SwitchInst *SI) {
+  // The SCCP optimization tends to produce code like this:
+  //   switch(x) { case 42: phi(42, ...) }
+  // Materializing the constant for the phi-argument needs instructions; So we
+  // change the code to:
+  //   switch(x) { case 42: phi(x, ...) }
+
+  Value *Condition = SI->getCondition();
+  // Avoid endless loop in degenerate case.
+  if (isa<ConstantInt>(*Condition))
+    return false;
+
+  bool Changed = false;
+  BasicBlock *SwitchBB = SI->getParent();
+  Type *ConditionType = Condition->getType();
+
+  for (const SwitchInst::CaseHandle &Case : SI->cases()) {
+    ConstantInt *CaseValue = Case.getCaseValue();
+    BasicBlock *CaseBB = Case.getCaseSuccessor();
+    // Set to true if we previously checked that `CaseBB` is only reached by
+    // a single case from this switch.
+    bool CheckedForSinglePred = false;
+    for (PHINode &PHI : CaseBB->phis()) {
+      Type *PHIType = PHI.getType();
+      // If ZExt is free then we can also catch patterns like this:
+      //   switch((i32)x) { case 42: phi((i64)42, ...); }
+      // and replace `(i64)42` with `zext i32 %x to i64`.
+      bool TryZExt =
+          PHIType->isIntegerTy() &&
+          PHIType->getIntegerBitWidth() > ConditionType->getIntegerBitWidth() &&
+          TLI->isZExtFree(ConditionType, PHIType);
+      if (PHIType == ConditionType || TryZExt) {
+        // Set to true to skip this case because of multiple preds.
+        bool SkipCase = false;
+        Value *Replacement = nullptr;
+        for (unsigned I = 0, E = PHI.getNumIncomingValues(); I != E; I++) {
+          Value *PHIValue = PHI.getIncomingValue(I);
+          if (PHIValue != CaseValue) {
+            if (!TryZExt)
+              continue;
+            ConstantInt *PHIValueInt = dyn_cast<ConstantInt>(PHIValue);
+            if (!PHIValueInt ||
+                PHIValueInt->getValue() !=
+                    CaseValue->getValue().zext(PHIType->getIntegerBitWidth()))
+              continue;
+          }
+          if (PHI.getIncomingBlock(I) != SwitchBB)
+            continue;
+          // We cannot optimize if there are multiple case labels jumping to
+          // this block.  This check may get expensive when there are many
+          // case labels so we test for it last.
+          if (!CheckedForSinglePred) {
+            CheckedForSinglePred = true;
+            if (SI->findCaseDest(CaseBB) == nullptr) {
+              SkipCase = true;
+              break;
+            }
+          }
+
+          if (Replacement == nullptr) {
+            if (PHIValue == CaseValue) {
+              Replacement = Condition;
+            } else {
+              IRBuilder<> Builder(SI);
+              Replacement = Builder.CreateZExt(Condition, PHIType);
+            }
+          }
+          PHI.setIncomingValue(I, Replacement);
+          Changed = true;
+        }
+        if (SkipCase)
+          break;
+      }
+    }
+  }
+  return Changed;
+}
+
+bool CodeGenPrepare::optimizeSwitchInst(SwitchInst *SI) {
+  bool Changed = optimizeSwitchType(SI);
+  Changed |= optimizeSwitchPhiConstants(SI);
+  return Changed;
+}
 
 namespace {
 

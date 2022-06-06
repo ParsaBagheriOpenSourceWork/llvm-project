@@ -2,11 +2,11 @@ add_llvm_component_library(LLVMObject
   Archive.cpp
   ArchiveWriter.cpp
   Binary.cpp
-  CodeSignatureSection.cpp
   COFFImportFile.cpp
   COFFModuleDefinition.cpp
   COFFObjectFile.cpp
   Decompressor.cpp
+  DXContainer.cpp
   ELF.cpp
   ELFObjectFile.cpp
   Error.cpp
@@ -19,6 +19,7 @@ add_llvm_component_library(LLVMObject
   ModuleSymbolTable.cpp
   Object.cpp
   ObjectFile.cpp
+  OffloadBinary.cpp
   RecordStreamer.cpp
   RelocationResolver.cpp
   SymbolicFile.cpp

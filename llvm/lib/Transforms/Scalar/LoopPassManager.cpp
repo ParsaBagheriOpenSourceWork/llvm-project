@@ -8,13 +8,12 @@
 
 #include "llvm/Transforms/Scalar/LoopPassManager.h"
 #include "llvm/Analysis/AssumptionCache.h"
-#include "llvm/Analysis/BasicAliasAnalysis.h"
 #include "llvm/Analysis/BlockFrequencyInfo.h"
-#include "llvm/Analysis/GlobalsModRef.h"
+#include "llvm/Analysis/BranchProbabilityInfo.h"
 #include "llvm/Analysis/MemorySSA.h"
-#include "llvm/Analysis/ScalarEvolutionAliasAnalysis.h"
+#include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
-#include "llvm/Support/Debug.h"
+#include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/Support/TimeProfiler.h"
 
 using namespace llvm;
@@ -48,9 +47,17 @@ void PassManager<Loop, LoopAnalysisManager, LoopStandardAnalysisResults &,
                  LPMUpdater &>::printPipeline(raw_ostream &OS,
                                               function_ref<StringRef(StringRef)>
                                                   MapClassName2PassName) {
-  for (unsigned Idx = 0, Size = LoopPasses.size(); Idx != Size; ++Idx) {
-    auto *P = LoopPasses[Idx].get();
-    P->printPipeline(OS, MapClassName2PassName);
+  assert(LoopPasses.size() + LoopNestPasses.size() == IsLoopNestPass.size());
+
+  unsigned IdxLP = 0, IdxLNP = 0;
+  for (unsigned Idx = 0, Size = IsLoopNestPass.size(); Idx != Size; ++Idx) {
+    if (IsLoopNestPass[Idx]) {
+      auto *P = LoopNestPasses[IdxLNP++].get();
+      P->printPipeline(OS, MapClassName2PassName);
+    } else {
+      auto *P = LoopPasses[IdxLP++].get();
+      P->printPipeline(OS, MapClassName2PassName);
+    }
     if (Idx + 1 < Size)
       OS << ",";
   }
@@ -207,6 +214,10 @@ PreservedAnalyses FunctionToLoopPassAdaptor::run(Function &F,
   BlockFrequencyInfo *BFI = UseBlockFrequencyInfo && F.hasProfileData()
                                 ? (&AM.getResult<BlockFrequencyAnalysis>(F))
                                 : nullptr;
+  BranchProbabilityInfo *BPI =
+      UseBranchProbabilityInfo && F.hasProfileData()
+          ? (&AM.getResult<BranchProbabilityAnalysis>(F))
+          : nullptr;
   LoopStandardAnalysisResults LAR = {AM.getResult<AAManager>(F),
                                      AM.getResult<AssumptionAnalysis>(F),
                                      AM.getResult<DominatorTreeAnalysis>(F),
@@ -215,6 +226,7 @@ PreservedAnalyses FunctionToLoopPassAdaptor::run(Function &F,
                                      AM.getResult<TargetLibraryAnalysis>(F),
                                      AM.getResult<TargetIRAnalysis>(F),
                                      BFI,
+                                     BPI,
                                      MSSA};
 
   // Setup the loop analysis manager from its proxy. It is important that
@@ -297,12 +309,12 @@ PreservedAnalyses FunctionToLoopPassAdaptor::run(Function &F,
 
 #ifndef NDEBUG
     // LoopAnalysisResults should always be valid.
-    // Note that we don't LAR.SE.verify() because that can change observed SE
-    // queries. See PR44815.
     if (VerifyDomInfo)
       LAR.DT.verify();
     if (VerifyLoopInfo)
       LAR.LI.verify(LAR.DT);
+    if (VerifySCEV)
+      LAR.SE.verify();
     if (LAR.MSSA && VerifyMemorySSA)
       LAR.MSSA->verifyMemorySSA();
 #endif
@@ -335,6 +347,8 @@ PreservedAnalyses FunctionToLoopPassAdaptor::run(Function &F,
   PA.preserve<ScalarEvolutionAnalysis>();
   if (UseBlockFrequencyInfo && F.hasProfileData())
     PA.preserve<BlockFrequencyAnalysis>();
+  if (UseBranchProbabilityInfo && F.hasProfileData())
+    PA.preserve<BranchProbabilityAnalysis>();
   if (UseMemorySSA)
     PA.preserve<MemorySSAAnalysis>();
   return PA;

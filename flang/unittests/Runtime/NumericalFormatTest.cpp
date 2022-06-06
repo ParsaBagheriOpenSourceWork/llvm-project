@@ -1,4 +1,4 @@
-//===-- flang/unittests/RuntimeGTest/NumericalFormatTest.cpp ----*- C++ -*-===//
+//===-- flang/unittests/Runtime/NumericalFormatTest.cpp ---------*- C++ -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -66,7 +66,7 @@ TEST(IOApiTests, HelloWorldOutputTest) {
   // Write string, integer, and logical values to buffer
   IONAME(OutputAscii)(cookie, "WORLD", 5);
   IONAME(OutputInteger64)(cookie, 678);
-  IONAME(OutputInteger64)(cookie, 0xfeedface);
+  IONAME(OutputInteger32)(cookie, 0xfeedface);
   IONAME(OutputLogical)(cookie, true);
 
   // Ensure IO succeeded
@@ -118,6 +118,9 @@ TEST(IOApiTests, MultilineOutputTest) {
   auto cookie{IONAME(BeginInternalArrayFormattedOutput)(
       section, format, std::strlen(format))};
 
+  // Fill last line with periods
+  std::memset(buffer[numLines - 1], '.', lineLength);
+
   // Write data to buffer
   IONAME(OutputAscii)(cookie, "WORLD", 5);
   IONAME(OutputAscii)(cookie, "HELLO", 5);
@@ -135,7 +138,7 @@ TEST(IOApiTests, MultilineOutputTest) {
                                   "                                "
                                   "789                 abcd 666 777"
                                   " 888 999                        "
-                                  "                                "};
+                                  "................................"};
   // Ensure formatted string matches expected output
   EXPECT_TRUE(
       CompareFormattedStrings(expect, std::string{buffer[0], sizeof buffer}))
@@ -144,11 +147,11 @@ TEST(IOApiTests, MultilineOutputTest) {
 }
 
 TEST(IOApiTests, ListInputTest) {
-  static const char input[]{",1*,(5.,6..)"};
+  static const char input[]{",1*,(5.,6.),(7.0,8.0)"};
   auto cookie{IONAME(BeginInternalListInput)(input, sizeof input - 1)};
 
   // Create real values for IO tests
-  static constexpr int numRealValues{6};
+  static constexpr int numRealValues{8};
   float z[numRealValues];
   for (int j{0}; j < numRealValues; ++j) {
     z[j] = -(j + 1);
@@ -166,7 +169,7 @@ TEST(IOApiTests, ListInputTest) {
                        << static_cast<int>(status);
 
   // Ensure writing complex values from floats does not result in an error
-  static constexpr int bufferSize{33};
+  static constexpr int bufferSize{39};
   char output[bufferSize];
   output[bufferSize - 1] = '\0';
   cookie = IONAME(BeginInternalListOutput)(output, bufferSize - 1);
@@ -182,7 +185,8 @@ TEST(IOApiTests, ListInputTest) {
                        << static_cast<int>(status);
 
   // Verify output buffer against expected value
-  static const char expect[bufferSize]{" (-1.,-2.) (-3.,-4.) (5.,6.)    "};
+  static const char expect[bufferSize]{
+      " (-1.,-2.) (-3.,-4.) (5.,6.) (7.,8.)  "};
   ASSERT_EQ(std::strncmp(output, expect, bufferSize), 0)
       << "Failed complex list-directed output, expected '" << expect
       << "', but got '" << output << "'";
@@ -329,6 +333,7 @@ TEST(IOApiTests, FormatDoubleValues) {
           {
               {"(E9.1,';')", " -0.0E+00;"},
               {"(F4.0,';')", " -0.;"},
+              {"(F0.1,';')", "-.0;"},
               {"(G8.0,';')", "-0.0E+00;"},
               {"(G8.1,';')", " -0.    ;"},
               {"(G0,';')", "-0.;"},
@@ -633,6 +638,8 @@ TEST(IOApiTests, FormatDoubleValues) {
       {"(F5.3,';')", 0.099999, "0.100;"},
       {"(F5.3,';')", 0.0099999, "0.010;"},
       {"(F5.3,';')", 0.00099999, "0.001;"},
+      {"(F5.3,';')", 0.0005, "0.001;"},
+      {"(F5.3,';')", 0.00049999, "0.000;"},
       {"(F5.3,';')", 0.000099999, "0.000;"},
       {"(F5.3,';')", -99.999, "*****;"},
       {"(F5.3,';')", -9.9999, "*****;"},
@@ -640,7 +647,10 @@ TEST(IOApiTests, FormatDoubleValues) {
       {"(F5.3,';')", -0.099999, "-.100;"},
       {"(F5.3,';')", -0.0099999, "-.010;"},
       {"(F5.3,';')", -0.00099999, "-.001;"},
+      {"(F5.3,';')", -0.0005, "-.001;"},
+      {"(F5.3,';')", -0.00049999, "-.000;"},
       {"(F5.3,';')", -0.000099999, "-.000;"},
+      {"(F0.1,';')", 0.0, ".0;"},
   };
 
   for (auto const &[format, value, expect] : individualTestCases) {
@@ -678,6 +688,8 @@ TEST(IOApiTests, FormatDoubleInputValues) {
       {"(1P,F18.0)", "               125", 0x4029000000000000}, // 12.5
       {"(BZ,F18.0)", "              125 ", 0x4093880000000000}, // 1250
       {"(BZ,F18.0)", "       125 . e +1 ", 0x42a6bcc41e900000}, // 1.25e13
+      {"(BZ,F18.0)", "           .      ", 0x0},
+      {"(BZ,F18.0)", "           . e +1 ", 0x0},
       {"(DC,F18.0)", "              12,5", 0x4029000000000000},
   };
   for (auto const &[format, data, want] : testCases) {
@@ -706,7 +718,6 @@ TEST(IOApiTests, FormatDoubleInputValues) {
 
     // Ensure raw uint64 value matches expected conversion from double
     ASSERT_EQ(u.raw, want) << '\'' << format << "' failed reading '" << data
-                           << "', want 0x" << std::hex << want << ", got 0x"
-                           << u.raw;
+                           << "', want " << want << ", got " << u.raw;
   }
 }

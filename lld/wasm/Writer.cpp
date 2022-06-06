@@ -17,8 +17,7 @@
 #include "SymbolTable.h"
 #include "SyntheticSections.h"
 #include "WriterUtils.h"
-#include "lld/Common/ErrorHandler.h"
-#include "lld/Common/Memory.h"
+#include "lld/Common/CommonLinkerContext.h"
 #include "lld/Common/Strings.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallSet.h"
@@ -73,6 +72,10 @@ private:
   void populateSymtab();
   void populateProducers();
   void populateTargetFeatures();
+  // populateTargetFeatures happens early on so some checks are delayed
+  // until imports and exports are finalized.  There are run unstead
+  // in checkImportExportTargetFeatures
+  void checkImportExportTargetFeatures();
   void calculateInitFunctions();
   void calculateImports();
   void calculateExports();
@@ -186,7 +189,7 @@ void Writer::createRelocSections() {
     else if (sec->type == WASM_SEC_CODE)
       name = "reloc.CODE";
     else if (sec->type == WASM_SEC_CUSTOM)
-      name = saver.save("reloc." + sec->name);
+      name = saver().save("reloc." + sec->name);
     else
       llvm_unreachable(
           "relocations only supported for code, data, or custom sections");
@@ -215,6 +218,7 @@ void Writer::writeSections() {
 }
 
 static void setGlobalPtr(DefinedGlobal *g, uint64_t memoryPtr) {
+  LLVM_DEBUG(dbgs() << "setGlobalPtr " << g->getName() << " -> " << memoryPtr << "\n");
   g->global->setPointerValue(memoryPtr);
 }
 
@@ -273,13 +277,15 @@ void Writer::layoutMemory() {
                 memoryPtr, seg->size, seg->alignment));
 
     if (!config->relocatable && seg->isTLS()) {
-      if (config->sharedMemory) {
+      if (WasmSym::tlsSize) {
         auto *tlsSize = cast<DefinedGlobal>(WasmSym::tlsSize);
         setGlobalPtr(tlsSize, seg->size);
-
+      }
+      if (WasmSym::tlsAlign) {
         auto *tlsAlign = cast<DefinedGlobal>(WasmSym::tlsAlign);
         setGlobalPtr(tlsAlign, int64_t{1} << seg->alignment);
-      } else if (WasmSym::tlsBase) {
+      }
+      if (!config->sharedMemory && WasmSym::tlsBase) {
         auto *tlsBase = cast<DefinedGlobal>(WasmSym::tlsBase);
         setGlobalPtr(tlsBase, memoryPtr);
       }
@@ -385,8 +391,8 @@ static void addStartStopSymbols(const OutputSegment *seg) {
   LLVM_DEBUG(dbgs() << "addStartStopSymbols: " << name << "\n");
   uint64_t start = seg->startVA;
   uint64_t stop = start + seg->size;
-  symtab->addOptionalDataSymbol(saver.save("__start_" + name), start);
-  symtab->addOptionalDataSymbol(saver.save("__stop_" + name), stop);
+  symtab->addOptionalDataSymbol(saver().save("__start_" + name), start);
+  symtab->addOptionalDataSymbol(saver().save("__stop_" + name), stop);
 }
 
 void Writer::addSections() {
@@ -433,6 +439,13 @@ void Writer::populateTargetFeatures() {
   SmallSet<std::string, 8> &allowed = out.targetFeaturesSec->features;
   bool tlsUsed = false;
 
+  if (config->isPic) {
+    // This should not be necessary because all PIC objects should
+    // contain the mutable-globals feature.
+    // TODO(https://bugs.llvm.org/show_bug.cgi?id=52339)
+    allowed.insert("mutable-globals");
+  }
+
   // Only infer used features if user did not specify features
   bool inferFeatures = !config->features.hasValue();
 
@@ -440,7 +453,7 @@ void Writer::populateTargetFeatures() {
     auto &explicitFeatures = config->features.getValue();
     allowed.insert(explicitFeatures.begin(), explicitFeatures.end());
     if (!config->checkFeatures)
-      return;
+      goto done;
   }
 
   // Find the sets of used, required, and disallowed features
@@ -468,8 +481,7 @@ void Writer::populateTargetFeatures() {
     auto isTLS = [](InputChunk *segment) {
       return segment->live && segment->isTLS();
     };
-    tlsUsed = tlsUsed ||
-              std::any_of(file->segments.begin(), file->segments.end(), isTLS);
+    tlsUsed = tlsUsed || llvm::any_of(file->segments, isTLS);
   }
 
   if (inferFeatures)
@@ -477,26 +489,7 @@ void Writer::populateTargetFeatures() {
       allowed.insert(std::string(key));
 
   if (!config->checkFeatures)
-    return;
-
-  if (!config->relocatable && allowed.count("mutable-globals") == 0) {
-    for (const Symbol *sym : out.importSec->importedSymbols) {
-      if (auto *global = dyn_cast<GlobalSymbol>(sym)) {
-        if (global->getGlobalType()->Mutable) {
-          error(Twine("mutable global imported but 'mutable-globals' feature "
-                      "not present in inputs: `") +
-                toString(*sym) + "`. Use --no-check-features to suppress.");
-        }
-      }
-    }
-    for (const Symbol *sym : out.exportSec->exportedSymbols) {
-      if (isa<GlobalSymbol>(sym)) {
-        error(Twine("mutable global exported but 'mutable-globals' feature "
-                    "not present in inputs: `") +
-              toString(*sym) + "`. Use --no-check-features to suppress.");
-      }
-    }
-  }
+    goto done;
 
   if (config->sharedMemory) {
     if (disallowed.count("shared-mem"))
@@ -546,6 +539,44 @@ void Writer::populateTargetFeatures() {
               ". Use --no-check-features to suppress.");
     }
   }
+
+done:
+  // Normally we don't include bss segments in the binary.  In particular if
+  // memory is not being imported then we can assume its zero initialized.
+  // In the case the memory is imported, we and we can use the memory.fill
+  // instrction than we can also avoid inluding the segments.
+  if (config->importMemory && !allowed.count("bulk-memory"))
+    config->emitBssSegments = true;
+
+  if (allowed.count("extended-const"))
+    config->extendedConst = true;
+
+  for (auto &feature : allowed)
+    log("Allowed feature: " + feature);
+}
+
+void Writer::checkImportExportTargetFeatures() {
+  if (config->relocatable || !config->checkFeatures)
+    return;
+
+  if (out.targetFeaturesSec->features.count("mutable-globals") == 0) {
+    for (const Symbol *sym : out.importSec->importedSymbols) {
+      if (auto *global = dyn_cast<GlobalSymbol>(sym)) {
+        if (global->getGlobalType()->Mutable) {
+          error(Twine("mutable global imported but 'mutable-globals' feature "
+                      "not present in inputs: `") +
+                toString(*sym) + "`. Use --no-check-features to suppress.");
+        }
+      }
+    }
+    for (const Symbol *sym : out.exportSec->exportedSymbols) {
+      if (isa<GlobalSymbol>(sym)) {
+        error(Twine("mutable global exported but 'mutable-globals' feature "
+                    "not present in inputs: `") +
+              toString(*sym) + "`. Use --no-check-features to suppress.");
+      }
+    }
+  }
 }
 
 static bool shouldImport(Symbol *sym) {
@@ -576,7 +607,8 @@ static bool shouldImport(Symbol *sym) {
         return false;
   }
 
-  if (config->isPic || config->relocatable || config->importUndefined)
+  if (config->isPic || config->relocatable || config->importUndefined ||
+      config->unresolvedSymbols == UnresolvedPolicy::ImportDynamic)
     return true;
   if (config->allowUndefinedSymbols.count(sym->getName()) != 0)
     return true;
@@ -706,7 +738,7 @@ void Writer::createCommandExportWrappers() {
 
   // If there are no ctors and there's no libc `__wasm_call_dtors` to
   // call, don't wrap the exports.
-  if (initFunctions.empty() && WasmSym::callDtors == NULL)
+  if (initFunctions.empty() && WasmSym::callDtors == nullptr)
     return;
 
   std::vector<DefinedFunction *> toWrap;
@@ -845,11 +877,7 @@ OutputSegment *Writer::createOutputSegment(StringRef name) {
   OutputSegment *s = make<OutputSegment>(name);
   if (config->sharedMemory)
     s->initFlags = WASM_DATA_SEGMENT_IS_PASSIVE;
-  // Exported memories are guaranteed to be zero-initialized, so no need
-  // to emit data segments for bss sections.
-  // TODO: consider initializing bss sections with memory.fill
-  // instructions when memory is imported and bulk-memory is available.
-  if (!config->importMemory && !config->relocatable && name.startswith(".bss"))
+  if (!config->relocatable && name.startswith(".bss"))
     s->isBss = true;
   segments.push_back(s);
   return s;
@@ -903,9 +931,9 @@ void Writer::combineOutputSegments() {
   // With PIC code we currently only support a single active data segment since
   // we only have a single __memory_base to use as our base address.  This pass
   // combines all data segments into a single .data segment.
-  // This restructions can be relaxed once we have extended constant
-  // expressions available:
-  // https://github.com/WebAssembly/extended-const
+  // This restriction does not apply when the extended const extension is
+  // available: https://github.com/WebAssembly/extended-const
+  assert(!config->extendedConst);
   assert(config->isPic && !config->sharedMemory);
   if (segments.size() <= 1)
     return;
@@ -940,20 +968,22 @@ static void createFunction(DefinedFunction *func, StringRef bodyContent) {
     writeUleb128(os, bodyContent.size(), "function size");
     os << bodyContent;
   }
-  ArrayRef<uint8_t> body = arrayRefFromStringRef(saver.save(functionBody));
+  ArrayRef<uint8_t> body = arrayRefFromStringRef(saver().save(functionBody));
   cast<SyntheticFunction>(func->function)->setBody(body);
 }
 
 bool Writer::needsPassiveInitialization(const OutputSegment *segment) {
-  return segment->initFlags & WASM_DATA_SEGMENT_IS_PASSIVE &&
-         !segment->isTLS() && !segment->isBss;
+  // If bulk memory features is supported then we can perform bss initialization
+  // (via memory.fill) during `__wasm_init_memory`.
+  if (config->importMemory && !segment->requiredInBinary())
+    return true;
+  return segment->initFlags & WASM_DATA_SEGMENT_IS_PASSIVE;
 }
 
 bool Writer::hasPassiveInitializedSegments() {
-  return std::find_if(segments.begin(), segments.end(),
-                      [this](const OutputSegment *s) {
-                        return this->needsPassiveInitialization(s);
-                      }) != segments.end();
+  return llvm::any_of(segments, [this](const OutputSegment *s) {
+    return this->needsPassiveInitialization(s);
+  });
 }
 
 void Writer::createSyntheticInitFunctions() {
@@ -965,38 +995,58 @@ void Writer::createSyntheticInitFunctions() {
   // Passive segments are used to avoid memory being reinitialized on each
   // thread's instantiation. These passive segments are initialized and
   // dropped in __wasm_init_memory, which is registered as the start function
-  if (config->sharedMemory && hasPassiveInitializedSegments()) {
+  // We also initialize bss segments (using memory.fill) as part of this
+  // function.
+  if (hasPassiveInitializedSegments()) {
     WasmSym::initMemory = symtab->addSyntheticFunction(
         "__wasm_init_memory", WASM_SYMBOL_VISIBILITY_HIDDEN,
         make<SyntheticFunction>(nullSignature, "__wasm_init_memory"));
     WasmSym::initMemory->markLive();
+    if (config->sharedMemory) {
+      // This global is assigned during  __wasm_init_memory in the shared memory
+      // case.
+      WasmSym::tlsBase->markLive();
+    }
   }
 
-  if (config->isPic) {
-    // For PIC code we create synthetic functions that apply relocations.
-    // These get called from __wasm_call_ctors before the user-level
-    // constructors.
+  if (config->sharedMemory && out.globalSec->needsTLSRelocations()) {
+    WasmSym::applyGlobalTLSRelocs = symtab->addSyntheticFunction(
+        "__wasm_apply_global_tls_relocs", WASM_SYMBOL_VISIBILITY_HIDDEN,
+        make<SyntheticFunction>(nullSignature,
+                                "__wasm_apply_global_tls_relocs"));
+    WasmSym::applyGlobalTLSRelocs->markLive();
+    // TLS relocations depend on  the __tls_base symbols
+    WasmSym::tlsBase->markLive();
+  }
+
+  if (config->isPic ||
+      config->unresolvedSymbols == UnresolvedPolicy::ImportDynamic) {
+    // For PIC code, or when dynamically importing addresses, we create
+    // synthetic functions that apply relocations.  These get called from
+    // __wasm_call_ctors before the user-level constructors.
     WasmSym::applyDataRelocs = symtab->addSyntheticFunction(
         "__wasm_apply_data_relocs", WASM_SYMBOL_VISIBILITY_HIDDEN,
         make<SyntheticFunction>(nullSignature, "__wasm_apply_data_relocs"));
     WasmSym::applyDataRelocs->markLive();
-
-    if (out.globalSec->needsRelocations()) {
-      WasmSym::applyGlobalRelocs = symtab->addSyntheticFunction(
-          "__wasm_apply_global_relocs", WASM_SYMBOL_VISIBILITY_HIDDEN,
-          make<SyntheticFunction>(nullSignature, "__wasm_apply_global_relocs"));
-      WasmSym::applyGlobalRelocs->markLive();
-      if (config->sharedMemory) {
-        WasmSym::applyGlobalTLSRelocs = symtab->addSyntheticFunction(
-            "__wasm_apply_global_tls_relocs", WASM_SYMBOL_VISIBILITY_HIDDEN,
-            make<SyntheticFunction>(nullSignature,
-                                    "__wasm_apply_global_tls_relocs"));
-        WasmSym::applyGlobalTLSRelocs->markLive();
-      }
-    }
   }
 
-  if (WasmSym::applyGlobalRelocs && WasmSym::initMemory) {
+  if (config->isPic && out.globalSec->needsRelocations()) {
+    WasmSym::applyGlobalRelocs = symtab->addSyntheticFunction(
+        "__wasm_apply_global_relocs", WASM_SYMBOL_VISIBILITY_HIDDEN,
+        make<SyntheticFunction>(nullSignature, "__wasm_apply_global_relocs"));
+    WasmSym::applyGlobalRelocs->markLive();
+  }
+
+  int startCount = 0;
+  if (WasmSym::applyGlobalRelocs)
+    startCount++;
+  if (WasmSym::WasmSym::initMemory || WasmSym::applyDataRelocs)
+    startCount++;
+
+  // If there is only one start function we can just use that function
+  // itself as the Wasm start function, otherwise we need to synthesize
+  // a new function to call them in sequence.
+  if (startCount > 1) {
     WasmSym::startFunction = symtab->addSyntheticFunction(
         "__wasm_start", WASM_SYMBOL_VISIBILITY_HIDDEN,
         make<SyntheticFunction>(nullSignature, "__wasm_start"));
@@ -1007,9 +1057,12 @@ void Writer::createSyntheticInitFunctions() {
 void Writer::createInitMemoryFunction() {
   LLVM_DEBUG(dbgs() << "createInitMemoryFunction\n");
   assert(WasmSym::initMemory);
-  assert(WasmSym::initMemoryFlag);
   assert(hasPassiveInitializedSegments());
-  uint64_t flagAddress = WasmSym::initMemoryFlag->getVA();
+  uint64_t flagAddress;
+  if (config->sharedMemory) {
+    assert(WasmSym::initMemoryFlag);
+    flagAddress = WasmSym::initMemoryFlag->getVA();
+  }
   bool is64 = config->is64.getValueOr(false);
   std::string bodyContent;
   {
@@ -1065,21 +1118,6 @@ void Writer::createInitMemoryFunction() {
     //    (i32.const $__init_memory_flag)
     //    (i32.const 1)
 
-    // With PIC code we cache the flag address in local 0
-    if (config->isPic) {
-      writeUleb128(os, 1, "num local decls");
-      writeUleb128(os, 1, "local count");
-      writeU8(os, is64 ? WASM_TYPE_I64 : WASM_TYPE_I32, "address type");
-      writeU8(os, WASM_OPCODE_GLOBAL_GET, "GLOBAL_GET");
-      writeUleb128(os, WasmSym::memoryBase->getGlobalIndex(), "memory_base");
-      writePtrConst(os, flagAddress, is64, "flag address");
-      writeU8(os, is64 ? WASM_OPCODE_I64_ADD : WASM_OPCODE_I32_ADD, "add");
-      writeU8(os, WASM_OPCODE_LOCAL_SET, "local.set");
-      writeUleb128(os, 0, "local 0");
-    } else {
-      writeUleb128(os, 0, "num locals");
-    }
-
     auto writeGetFlagAddress = [&]() {
       if (config->isPic) {
         writeU8(os, WASM_OPCODE_LOCAL_GET, "local.get");
@@ -1089,88 +1127,152 @@ void Writer::createInitMemoryFunction() {
       }
     };
 
-    // Set up destination blocks
-    writeU8(os, WASM_OPCODE_BLOCK, "block $drop");
-    writeU8(os, WASM_TYPE_NORESULT, "block type");
-    writeU8(os, WASM_OPCODE_BLOCK, "block $wait");
-    writeU8(os, WASM_TYPE_NORESULT, "block type");
-    writeU8(os, WASM_OPCODE_BLOCK, "block $init");
-    writeU8(os, WASM_TYPE_NORESULT, "block type");
+    if (config->sharedMemory) {
+      // With PIC code we cache the flag address in local 0
+      if (config->isPic) {
+        writeUleb128(os, 1, "num local decls");
+        writeUleb128(os, 2, "local count");
+        writeU8(os, is64 ? WASM_TYPE_I64 : WASM_TYPE_I32, "address type");
+        writeU8(os, WASM_OPCODE_GLOBAL_GET, "GLOBAL_GET");
+        writeUleb128(os, WasmSym::memoryBase->getGlobalIndex(), "memory_base");
+        writePtrConst(os, flagAddress, is64, "flag address");
+        writeU8(os, is64 ? WASM_OPCODE_I64_ADD : WASM_OPCODE_I32_ADD, "add");
+        writeU8(os, WASM_OPCODE_LOCAL_SET, "local.set");
+        writeUleb128(os, 0, "local 0");
+      } else {
+        writeUleb128(os, 0, "num locals");
+      }
 
-    // Atomically check whether we win the race.
-    writeGetFlagAddress();
-    writeI32Const(os, 0, "expected flag value");
-    writeI32Const(os, 1, "new flag value");
-    writeU8(os, WASM_OPCODE_ATOMICS_PREFIX, "atomics prefix");
-    writeUleb128(os, WASM_OPCODE_I32_RMW_CMPXCHG, "i32.atomic.rmw.cmpxchg");
-    writeMemArg(os, 2, 0);
+      // Set up destination blocks
+      writeU8(os, WASM_OPCODE_BLOCK, "block $drop");
+      writeU8(os, WASM_TYPE_NORESULT, "block type");
+      writeU8(os, WASM_OPCODE_BLOCK, "block $wait");
+      writeU8(os, WASM_TYPE_NORESULT, "block type");
+      writeU8(os, WASM_OPCODE_BLOCK, "block $init");
+      writeU8(os, WASM_TYPE_NORESULT, "block type");
 
-    // Based on the value, decide what to do next.
-    writeU8(os, WASM_OPCODE_BR_TABLE, "br_table");
-    writeUleb128(os, 2, "label vector length");
-    writeUleb128(os, 0, "label $init");
-    writeUleb128(os, 1, "label $wait");
-    writeUleb128(os, 2, "default label $drop");
+      // Atomically check whether we win the race.
+      writeGetFlagAddress();
+      writeI32Const(os, 0, "expected flag value");
+      writeI32Const(os, 1, "new flag value");
+      writeU8(os, WASM_OPCODE_ATOMICS_PREFIX, "atomics prefix");
+      writeUleb128(os, WASM_OPCODE_I32_RMW_CMPXCHG, "i32.atomic.rmw.cmpxchg");
+      writeMemArg(os, 2, 0);
 
-    // Initialize passive data segments
-    writeU8(os, WASM_OPCODE_END, "end $init");
+      // Based on the value, decide what to do next.
+      writeU8(os, WASM_OPCODE_BR_TABLE, "br_table");
+      writeUleb128(os, 2, "label vector length");
+      writeUleb128(os, 0, "label $init");
+      writeUleb128(os, 1, "label $wait");
+      writeUleb128(os, 2, "default label $drop");
+
+      // Initialize passive data segments
+      writeU8(os, WASM_OPCODE_END, "end $init");
+    } else {
+      writeUleb128(os, 0, "num local decls");
+    }
+
     for (const OutputSegment *s : segments) {
       if (needsPassiveInitialization(s)) {
-        // destination address
+        // For passive BSS segments we can simple issue a memory.fill(0).
+        // For non-BSS segments we do a memory.init.  Both these
+        // instructions take as thier first argument the destination
+        // address.
         writePtrConst(os, s->startVA, is64, "destination address");
         if (config->isPic) {
           writeU8(os, WASM_OPCODE_GLOBAL_GET, "GLOBAL_GET");
           writeUleb128(os, WasmSym::memoryBase->getGlobalIndex(),
-                       "memory_base");
+                       "__memory_base");
           writeU8(os, is64 ? WASM_OPCODE_I64_ADD : WASM_OPCODE_I32_ADD,
                   "i32.add");
         }
-        // source segment offset
-        writeI32Const(os, 0, "segment offset");
-        // memory region size
-        writeI32Const(os, s->size, "memory region size");
-        // memory.init instruction
-        writeU8(os, WASM_OPCODE_MISC_PREFIX, "bulk-memory prefix");
-        writeUleb128(os, WASM_OPCODE_MEMORY_INIT, "memory.init");
-        writeUleb128(os, s->index, "segment index immediate");
-        writeU8(os, 0, "memory index immediate");
+
+        // When we initialize the TLS segment we also set the `__tls_base`
+        // global.  This allows the runtime to use this static copy of the
+        // TLS data for the first/main thread.
+        if (config->sharedMemory && s->isTLS()) {
+          if (config->isPic) {
+            // Cache the result of the addionion in local 0
+            writeU8(os, WASM_OPCODE_LOCAL_TEE, "local.tee");
+            writeUleb128(os, 1, "local 1");
+          } else {
+            writePtrConst(os, s->startVA, is64, "destination address");
+          }
+          writeU8(os, WASM_OPCODE_GLOBAL_SET, "GLOBAL_SET");
+          writeUleb128(os, WasmSym::tlsBase->getGlobalIndex(),
+                       "__tls_base");
+          if (config->isPic) {
+            writeU8(os, WASM_OPCODE_LOCAL_GET, "local.tee");
+            writeUleb128(os, 1, "local 1");
+          }
+        }
+
+        if (s->isBss) {
+          writeI32Const(os, 0, "fill value");
+          writeI32Const(os, s->size, "memory region size");
+          writeU8(os, WASM_OPCODE_MISC_PREFIX, "bulk-memory prefix");
+          writeUleb128(os, WASM_OPCODE_MEMORY_FILL, "memory.fill");
+          writeU8(os, 0, "memory index immediate");
+        } else {
+          writeI32Const(os, 0, "source segment offset");
+          writeI32Const(os, s->size, "memory region size");
+          writeU8(os, WASM_OPCODE_MISC_PREFIX, "bulk-memory prefix");
+          writeUleb128(os, WASM_OPCODE_MEMORY_INIT, "memory.init");
+          writeUleb128(os, s->index, "segment index immediate");
+          writeU8(os, 0, "memory index immediate");
+        }
       }
     }
 
-    // Set flag to 2 to mark end of initialization
-    writeGetFlagAddress();
-    writeI32Const(os, 2, "flag value");
-    writeU8(os, WASM_OPCODE_ATOMICS_PREFIX, "atomics prefix");
-    writeUleb128(os, WASM_OPCODE_I32_ATOMIC_STORE, "i32.atomic.store");
-    writeMemArg(os, 2, 0);
+    // Memory init is now complete.  Apply data relocation if there
+    // are any.
+    if (WasmSym::applyDataRelocs) {
+      writeU8(os, WASM_OPCODE_CALL, "CALL");
+      writeUleb128(os, WasmSym::applyDataRelocs->getFunctionIndex(),
+                   "function index");
+    }
 
-    // Notify any waiters that memory initialization is complete
-    writeGetFlagAddress();
-    writeI32Const(os, -1, "number of waiters");
-    writeU8(os, WASM_OPCODE_ATOMICS_PREFIX, "atomics prefix");
-    writeUleb128(os, WASM_OPCODE_ATOMIC_NOTIFY, "atomic.notify");
-    writeMemArg(os, 2, 0);
-    writeU8(os, WASM_OPCODE_DROP, "drop");
+    if (config->sharedMemory) {
+      // Set flag to 2 to mark end of initialization
+      writeGetFlagAddress();
+      writeI32Const(os, 2, "flag value");
+      writeU8(os, WASM_OPCODE_ATOMICS_PREFIX, "atomics prefix");
+      writeUleb128(os, WASM_OPCODE_I32_ATOMIC_STORE, "i32.atomic.store");
+      writeMemArg(os, 2, 0);
 
-    // Branch to drop the segments
-    writeU8(os, WASM_OPCODE_BR, "br");
-    writeUleb128(os, 1, "label $drop");
+      // Notify any waiters that memory initialization is complete
+      writeGetFlagAddress();
+      writeI32Const(os, -1, "number of waiters");
+      writeU8(os, WASM_OPCODE_ATOMICS_PREFIX, "atomics prefix");
+      writeUleb128(os, WASM_OPCODE_ATOMIC_NOTIFY, "atomic.notify");
+      writeMemArg(os, 2, 0);
+      writeU8(os, WASM_OPCODE_DROP, "drop");
 
-    // Wait for the winning thread to initialize memory
-    writeU8(os, WASM_OPCODE_END, "end $wait");
-    writeGetFlagAddress();
-    writeI32Const(os, 1, "expected flag value");
-    writeI64Const(os, -1, "timeout");
+      // Branch to drop the segments
+      writeU8(os, WASM_OPCODE_BR, "br");
+      writeUleb128(os, 1, "label $drop");
 
-    writeU8(os, WASM_OPCODE_ATOMICS_PREFIX, "atomics prefix");
-    writeUleb128(os, WASM_OPCODE_I32_ATOMIC_WAIT, "i32.atomic.wait");
-    writeMemArg(os, 2, 0);
-    writeU8(os, WASM_OPCODE_DROP, "drop");
+      // Wait for the winning thread to initialize memory
+      writeU8(os, WASM_OPCODE_END, "end $wait");
+      writeGetFlagAddress();
+      writeI32Const(os, 1, "expected flag value");
+      writeI64Const(os, -1, "timeout");
 
-    // Unconditionally drop passive data segments
-    writeU8(os, WASM_OPCODE_END, "end $drop");
+      writeU8(os, WASM_OPCODE_ATOMICS_PREFIX, "atomics prefix");
+      writeUleb128(os, WASM_OPCODE_I32_ATOMIC_WAIT, "i32.atomic.wait");
+      writeMemArg(os, 2, 0);
+      writeU8(os, WASM_OPCODE_DROP, "drop");
+
+      // Unconditionally drop passive data segments
+      writeU8(os, WASM_OPCODE_END, "end $drop");
+    }
+
     for (const OutputSegment *s : segments) {
-      if (needsPassiveInitialization(s)) {
+      if (needsPassiveInitialization(s) && !s->isBss) {
+        // The TLS region should not be dropped since its is needed
+        // during the intiailizing of each thread (__wasm_init_tls).
+        if (config->sharedMemory && s->isTLS())
+          continue;
         // data.drop instruction
         writeU8(os, WASM_OPCODE_MISC_PREFIX, "bulk-memory prefix");
         writeUleb128(os, WASM_OPCODE_DATA_DROP, "data.drop");
@@ -1186,17 +1288,28 @@ void Writer::createInitMemoryFunction() {
 }
 
 void Writer::createStartFunction() {
+  // If the start function exists when we have more than one function to call.
   if (WasmSym::startFunction) {
     std::string bodyContent;
     {
       raw_string_ostream os(bodyContent);
       writeUleb128(os, 0, "num locals");
-      writeU8(os, WASM_OPCODE_CALL, "CALL");
-      writeUleb128(os, WasmSym::initMemory->getFunctionIndex(),
-                   "function index");
-      writeU8(os, WASM_OPCODE_CALL, "CALL");
-      writeUleb128(os, WasmSym::applyGlobalRelocs->getFunctionIndex(),
-                   "function index");
+      if (WasmSym::applyGlobalRelocs) {
+        writeU8(os, WASM_OPCODE_CALL, "CALL");
+        writeUleb128(os, WasmSym::applyGlobalRelocs->getFunctionIndex(),
+                     "function index");
+      }
+      if (WasmSym::initMemory) {
+        writeU8(os, WASM_OPCODE_CALL, "CALL");
+        writeUleb128(os, WasmSym::initMemory->getFunctionIndex(),
+                     "function index");
+      } else if (WasmSym::applyDataRelocs) {
+        // When initMemory is present it calls applyDataRelocs.  If not,
+        // we must call it directly.
+        writeU8(os, WASM_OPCODE_CALL, "CALL");
+        writeUleb128(os, WasmSym::applyDataRelocs->getFunctionIndex(),
+                     "function index");
+      }
       writeU8(os, WASM_OPCODE_END, "END");
     }
     createFunction(WasmSym::startFunction, bodyContent);
@@ -1204,6 +1317,8 @@ void Writer::createStartFunction() {
     WasmSym::startFunction = WasmSym::initMemory;
   } else if (WasmSym::applyGlobalRelocs) {
     WasmSym::startFunction = WasmSym::applyGlobalRelocs;
+  } else if (WasmSym::applyDataRelocs) {
+    WasmSym::startFunction = WasmSym::applyDataRelocs;
   }
 }
 
@@ -1229,7 +1344,7 @@ void Writer::createApplyDataRelocationsFunction() {
 }
 
 // Similar to createApplyDataRelocationsFunction but generates relocation code
-// fro WebAssembly globals. Because these globals are not shared between threads
+// for WebAssembly globals. Because these globals are not shared between threads
 // these relocation need to run on every thread.
 void Writer::createApplyGlobalRelocationsFunction() {
   // First write the body's contents to a string.
@@ -1266,8 +1381,7 @@ void Writer::createCallCtorsFunction() {
   // If __wasm_call_ctors isn't referenced, there aren't any ctors, and we
   // aren't calling `__wasm_apply_data_relocs` for Emscripten-style PIC, don't
   // define the `__wasm_call_ctors` function.
-  if (!WasmSym::callCtors->isLive() && !WasmSym::applyDataRelocs &&
-      initFunctions.empty())
+  if (!WasmSym::callCtors->isLive() && initFunctions.empty())
     return;
 
   // First write the body's contents to a string.
@@ -1276,7 +1390,7 @@ void Writer::createCallCtorsFunction() {
     raw_string_ostream os(bodyContent);
     writeUleb128(os, 0, "num locals");
 
-    if (WasmSym::applyDataRelocs) {
+    if (WasmSym::applyDataRelocs && !WasmSym::initMemory) {
       writeU8(os, WASM_OPCODE_CALL, "CALL");
       writeUleb128(os, WasmSym::applyDataRelocs->getFunctionIndex(),
                    "function index");
@@ -1468,8 +1582,8 @@ void Writer::run() {
       sym->forceExport = true;
   }
 
-  // Delay reporting error about explict exports until after addStartStopSymbols
-  // which can create optional symbols.
+  // Delay reporting error about explicit exports until after
+  // addStartStopSymbols which can create optional symbols.
   for (auto &name : config->requiredExports) {
     Symbol *sym = symtab->find(name);
     if (!sym || !sym->isDefined()) {
@@ -1480,8 +1594,15 @@ void Writer::run() {
     }
   }
 
-  if (config->isPic && !config->sharedMemory) {
-    // In shared memory mode all data segments are passive and initilized
+  log("-- populateTargetFeatures");
+  populateTargetFeatures();
+
+  // When outputting PIC code each segment lives at at fixes offset from the
+  // `__memory_base` import.  Unless we support the extended const expression we
+  // can't do addition inside the constant expression, so we much combine the
+  // segments into a single one that can live at `__memory_base`.
+  if (config->isPic && !config->extendedConst && !config->sharedMemory) {
+    // In shared memory mode all data segments are passive and initialized
     // via __wasm_init_memory.
     log("-- combineOutputSegments");
     combineOutputSegments();
@@ -1531,8 +1652,10 @@ void Writer::run() {
     }
   }
 
-  if (WasmSym::initTLS && WasmSym::initTLS->isLive())
+  if (WasmSym::initTLS && WasmSym::initTLS->isLive()) {
+    log("-- createInitTLSFunction");
     createInitTLSFunction();
+  }
 
   if (errorCount())
     return;
@@ -1545,8 +1668,8 @@ void Writer::run() {
   calculateCustomSections();
   log("-- populateSymtab");
   populateSymtab();
-  log("-- populateTargetFeatures");
-  populateTargetFeatures();
+  log("-- checkImportExportTargetFeatures");
+  checkImportExportTargetFeatures();
   log("-- addSections");
   addSections();
 

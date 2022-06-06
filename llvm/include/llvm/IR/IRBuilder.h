@@ -25,15 +25,15 @@
 #include "llvm/IR/ConstantFolder.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DataLayout.h"
-#include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/DebugLoc.h"
 #include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/FPEnv.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
-#include "llvm/IR/IntrinsicInst.h"
+#include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Operator.h"
@@ -44,7 +44,6 @@
 #include "llvm/Support/CBindingWrapping.h"
 #include "llvm/Support/Casting.h"
 #include <cassert>
-#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <utility>
@@ -52,7 +51,6 @@
 namespace llvm {
 
 class APInt;
-class MDNode;
 class Use;
 
 /// This provides the default implementation of the IRBuilder
@@ -78,7 +76,7 @@ class IRBuilderCallbackInserter : public IRBuilderDefaultInserter {
   std::function<void(Instruction *)> Callback;
 
 public:
-  virtual ~IRBuilderCallbackInserter();
+  ~IRBuilderCallbackInserter() override;
 
   IRBuilderCallbackInserter(std::function<void(Instruction *)> Callback)
       : Callback(std::move(Callback)) {}
@@ -126,21 +124,18 @@ protected:
   MDNode *DefaultFPMathTag;
   FastMathFlags FMF;
 
-  bool IsFPConstrained;
-  fp::ExceptionBehavior DefaultConstrainedExcept;
-  RoundingMode DefaultConstrainedRounding;
+  bool IsFPConstrained = false;
+  fp::ExceptionBehavior DefaultConstrainedExcept = fp::ebStrict;
+  RoundingMode DefaultConstrainedRounding = RoundingMode::Dynamic;
 
   ArrayRef<OperandBundleDef> DefaultOperandBundles;
 
 public:
   IRBuilderBase(LLVMContext &context, const IRBuilderFolder &Folder,
-                const IRBuilderDefaultInserter &Inserter,
-                MDNode *FPMathTag, ArrayRef<OperandBundleDef> OpBundles)
+                const IRBuilderDefaultInserter &Inserter, MDNode *FPMathTag,
+                ArrayRef<OperandBundleDef> OpBundles)
       : Context(context), Folder(Folder), Inserter(Inserter),
-        DefaultFPMathTag(FPMathTag), IsFPConstrained(false),
-        DefaultConstrainedExcept(fp::ebStrict),
-        DefaultConstrainedRounding(RoundingMode::Dynamic),
-        DefaultOperandBundles(OpBundles) {
+        DefaultFPMathTag(FPMathTag), DefaultOperandBundles(OpBundles) {
     ClearInsertionPoint();
   }
 
@@ -219,23 +214,11 @@ public:
   }
 
   /// Get location information used by debugging information.
-  DebugLoc getCurrentDebugLocation() const {
-    for (auto &KV : MetadataToCopy)
-      if (KV.first == LLVMContext::MD_dbg)
-        return {cast<DILocation>(KV.second)};
-
-    return {};
-  }
+  DebugLoc getCurrentDebugLocation() const;
 
   /// If this builder has a current debug location, set it on the
   /// specified instruction.
-  void SetInstDebugLocation(Instruction *I) const {
-    for (const auto &KV : MetadataToCopy)
-      if (KV.first == LLVMContext::MD_dbg) {
-        I->setDebugLoc(DebugLoc(KV.second));
-        return;
-      }
-  }
+  void SetInstDebugLocation(Instruction *I) const;
 
   /// Add all entries in MetadataToCopy to \p I.
   void AddMetadataToInst(Instruction *I) const {
@@ -316,7 +299,7 @@ public:
   /// Set the exception handling to be used with constrained floating point
   void setDefaultConstrainedExcept(fp::ExceptionBehavior NewExcept) {
 #ifndef NDEBUG
-    Optional<StringRef> ExceptStr = ExceptionBehaviorToStr(NewExcept);
+    Optional<StringRef> ExceptStr = convertExceptionBehaviorToStr(NewExcept);
     assert(ExceptStr.hasValue() && "Garbage strict exception behavior!");
 #endif
     DefaultConstrainedExcept = NewExcept;
@@ -325,7 +308,7 @@ public:
   /// Set the rounding mode handling to be used with constrained floating point
   void setDefaultConstrainedRounding(RoundingMode NewRounding) {
 #ifndef NDEBUG
-    Optional<StringRef> RoundingStr = RoundingModeToStr(NewRounding);
+    Optional<StringRef> RoundingStr = convertRoundingModeToStr(NewRounding);
     assert(RoundingStr.hasValue() && "Garbage strict rounding mode!");
 #endif
     DefaultConstrainedRounding = NewRounding;
@@ -555,6 +538,11 @@ public:
   /// Fetch the type representing void.
   Type *getVoidTy() {
     return Type::getVoidTy(Context);
+  }
+
+  /// Fetch the type representing a pointer.
+  PointerType *getPtrTy(unsigned AddrSpace = 0) {
+    return PointerType::get(Context, AddrSpace);
   }
 
   /// Fetch the type representing a pointer to an 8-bit integer value.
@@ -790,7 +778,7 @@ public:
   /// Create a call to the experimental.gc.statepoint intrinsic to
   /// start a new statepoint sequence.
   CallInst *CreateGCStatepointCall(uint64_t ID, uint32_t NumPatchBytes,
-                                   Value *ActualCallee,
+                                   FunctionCallee ActualCallee,
                                    ArrayRef<Value *> CallArgs,
                                    Optional<ArrayRef<Value *>> DeoptArgs,
                                    ArrayRef<Value *> GCArgs,
@@ -799,7 +787,7 @@ public:
   /// Create a call to the experimental.gc.statepoint intrinsic to
   /// start a new statepoint sequence.
   CallInst *CreateGCStatepointCall(uint64_t ID, uint32_t NumPatchBytes,
-                                   Value *ActualCallee, uint32_t Flags,
+                                   FunctionCallee ActualCallee, uint32_t Flags,
                                    ArrayRef<Value *> CallArgs,
                                    Optional<ArrayRef<Use>> TransitionArgs,
                                    Optional<ArrayRef<Use>> DeoptArgs,
@@ -810,7 +798,8 @@ public:
   /// in using makeArrayRef(CS.arg_begin(), CS.arg_end()); Use needs to be
   /// .get()'ed to get the Value pointer.
   CallInst *CreateGCStatepointCall(uint64_t ID, uint32_t NumPatchBytes,
-                                   Value *ActualCallee, ArrayRef<Use> CallArgs,
+                                   FunctionCallee ActualCallee,
+                                   ArrayRef<Use> CallArgs,
                                    Optional<ArrayRef<Value *>> DeoptArgs,
                                    ArrayRef<Value *> GCArgs,
                                    const Twine &Name = "");
@@ -819,7 +808,7 @@ public:
   /// start a new statepoint sequence.
   InvokeInst *
   CreateGCStatepointInvoke(uint64_t ID, uint32_t NumPatchBytes,
-                           Value *ActualInvokee, BasicBlock *NormalDest,
+                           FunctionCallee ActualInvokee, BasicBlock *NormalDest,
                            BasicBlock *UnwindDest, ArrayRef<Value *> InvokeArgs,
                            Optional<ArrayRef<Value *>> DeoptArgs,
                            ArrayRef<Value *> GCArgs, const Twine &Name = "");
@@ -827,7 +816,7 @@ public:
   /// Create an invoke to the experimental.gc.statepoint intrinsic to
   /// start a new statepoint sequence.
   InvokeInst *CreateGCStatepointInvoke(
-      uint64_t ID, uint32_t NumPatchBytes, Value *ActualInvokee,
+      uint64_t ID, uint32_t NumPatchBytes, FunctionCallee ActualInvokee,
       BasicBlock *NormalDest, BasicBlock *UnwindDest, uint32_t Flags,
       ArrayRef<Value *> InvokeArgs, Optional<ArrayRef<Use>> TransitionArgs,
       Optional<ArrayRef<Use>> DeoptArgs, ArrayRef<Value *> GCArgs,
@@ -838,7 +827,7 @@ public:
   // get the Value *.
   InvokeInst *
   CreateGCStatepointInvoke(uint64_t ID, uint32_t NumPatchBytes,
-                           Value *ActualInvokee, BasicBlock *NormalDest,
+                           FunctionCallee ActualInvokee, BasicBlock *NormalDest,
                            BasicBlock *UnwindDest, ArrayRef<Use> InvokeArgs,
                            Optional<ArrayRef<Value *>> DeoptArgs,
                            ArrayRef<Value *> GCArgs, const Twine &Name = "");
@@ -1176,7 +1165,7 @@ private:
     if (Rounding.hasValue())
       UseRounding = Rounding.getValue();
 
-    Optional<StringRef> RoundingStr = RoundingModeToStr(UseRounding);
+    Optional<StringRef> RoundingStr = convertRoundingModeToStr(UseRounding);
     assert(RoundingStr.hasValue() && "Garbage strict rounding mode!");
     auto *RoundingMDS = MDString::get(Context, RoundingStr.getValue());
 
@@ -1189,7 +1178,7 @@ private:
     if (Except.hasValue())
       UseExcept = Except.getValue();
 
-    Optional<StringRef> ExceptStr = ExceptionBehaviorToStr(UseExcept);
+    Optional<StringRef> ExceptStr = convertExceptionBehaviorToStr(UseExcept);
     assert(ExceptStr.hasValue() && "Garbage strict exception behavior!");
     auto *ExceptMDS = MDString::get(Context, ExceptStr.getValue());
 
@@ -1211,9 +1200,8 @@ private:
 public:
   Value *CreateAdd(Value *LHS, Value *RHS, const Twine &Name = "",
                    bool HasNUW = false, bool HasNSW = false) {
-    if (auto *LC = dyn_cast<Constant>(LHS))
-      if (auto *RC = dyn_cast<Constant>(RHS))
-        return Insert(Folder.CreateAdd(LC, RC, HasNUW, HasNSW), Name);
+    if (auto *V = Folder.FoldAdd(LHS, RHS, HasNUW, HasNSW))
+      return V;
     return CreateInsertNUWNSWBinOp(Instruction::Add, LHS, RHS, Name,
                                    HasNUW, HasNSW);
   }
@@ -1360,12 +1348,8 @@ public:
   }
 
   Value *CreateAnd(Value *LHS, Value *RHS, const Twine &Name = "") {
-    if (auto *RC = dyn_cast<Constant>(RHS)) {
-      if (isa<ConstantInt>(RC) && cast<ConstantInt>(RC)->isMinusOne())
-        return LHS;  // LHS & -1 -> LHS
-      if (auto *LC = dyn_cast<Constant>(LHS))
-        return Insert(Folder.CreateAnd(LC, RC), Name);
-    }
+    if (auto *V = Folder.FoldAnd(LHS, RHS))
+      return V;
     return Insert(BinaryOperator::CreateAnd(LHS, RHS), Name);
   }
 
@@ -1386,12 +1370,8 @@ public:
   }
 
   Value *CreateOr(Value *LHS, Value *RHS, const Twine &Name = "") {
-    if (auto *RC = dyn_cast<Constant>(RHS)) {
-      if (RC->isNullValue())
-        return LHS;  // LHS | 0 -> LHS
-      if (auto *LC = dyn_cast<Constant>(LHS))
-        return Insert(Folder.CreateOr(LC, RC), Name);
-    }
+    if (auto *V = Folder.FoldOr(LHS, RHS))
+      return V;
     return Insert(BinaryOperator::CreateOr(LHS, RHS), Name);
   }
 
@@ -1571,6 +1551,15 @@ public:
                         Cond2, Name);
   }
 
+  // NOTE: this is sequential, non-commutative, ordered reduction!
+  Value *CreateLogicalOr(ArrayRef<Value *> Ops) {
+    assert(!Ops.empty());
+    Value *Accum = Ops[0];
+    for (unsigned i = 1; i < Ops.size(); i++)
+      Accum = CreateLogicalOr(Accum, Ops[i]);
+    return Accum;
+  }
+
   CallInst *CreateConstrainedFPBinOp(
       Intrinsic::ID ID, Value *L, Value *R, Instruction *FMFSource = nullptr,
       const Twine &Name = "", MDNode *FPMathTag = nullptr,
@@ -1670,32 +1659,6 @@ public:
     return CreateAlignedLoad(Ty, Ptr, MaybeAlign(), isVolatile, Name);
   }
 
-  // Deprecated [opaque pointer types]
-  LLVM_ATTRIBUTE_DEPRECATED(LoadInst *CreateLoad(Value *Ptr,
-                                                 const char *Name),
-                            "Use the version that explicitly specifies the "
-                            "loaded type instead") {
-    return CreateLoad(Ptr->getType()->getPointerElementType(), Ptr, Name);
-  }
-
-  // Deprecated [opaque pointer types]
-  LLVM_ATTRIBUTE_DEPRECATED(LoadInst *CreateLoad(Value *Ptr,
-                                                 const Twine &Name = ""),
-                            "Use the version that explicitly specifies the "
-                            "loaded type instead") {
-    return CreateLoad(Ptr->getType()->getPointerElementType(), Ptr, Name);
-  }
-
-  // Deprecated [opaque pointer types]
-  LLVM_ATTRIBUTE_DEPRECATED(LoadInst *CreateLoad(Value *Ptr,
-                                                 bool isVolatile,
-                                                 const Twine &Name = ""),
-                            "Use the version that explicitly specifies the "
-                            "loaded type instead") {
-    return CreateLoad(Ptr->getType()->getPointerElementType(), Ptr, isVolatile,
-                      Name);
-  }
-
   StoreInst *CreateStore(Value *Val, Value *Ptr, bool isVolatile = false) {
     return CreateAlignedStore(Val, Ptr, MaybeAlign(), isVolatile);
   }
@@ -1717,35 +1680,6 @@ public:
       Align = DL.getABITypeAlign(Ty);
     }
     return Insert(new LoadInst(Ty, Ptr, Twine(), isVolatile, *Align), Name);
-  }
-
-  // Deprecated [opaque pointer types]
-  LLVM_ATTRIBUTE_DEPRECATED(LoadInst *CreateAlignedLoad(Value *Ptr,
-                                                        MaybeAlign Align,
-                                                        const char *Name),
-                            "Use the version that explicitly specifies the "
-                            "loaded type instead") {
-    return CreateAlignedLoad(Ptr->getType()->getPointerElementType(), Ptr,
-                             Align, Name);
-  }
-  // Deprecated [opaque pointer types]
-  LLVM_ATTRIBUTE_DEPRECATED(LoadInst *CreateAlignedLoad(Value *Ptr,
-                                                        MaybeAlign Align,
-                                                        const Twine &Name = ""),
-                            "Use the version that explicitly specifies the "
-                            "loaded type instead") {
-    return CreateAlignedLoad(Ptr->getType()->getPointerElementType(), Ptr,
-                             Align, Name);
-  }
-  // Deprecated [opaque pointer types]
-  LLVM_ATTRIBUTE_DEPRECATED(LoadInst *CreateAlignedLoad(Value *Ptr,
-                                                        MaybeAlign Align,
-                                                        bool isVolatile,
-                                                        const Twine &Name = ""),
-                            "Use the version that explicitly specifies the "
-                            "loaded type instead") {
-    return CreateAlignedLoad(Ptr->getType()->getPointerElementType(), Ptr,
-                             Align, isVolatile, Name);
   }
 
   StoreInst *CreateAlignedStore(Value *Val, Value *Ptr, MaybeAlign Align,
@@ -1788,82 +1722,27 @@ public:
     return Insert(new AtomicRMWInst(Op, Ptr, Val, *Align, Ordering, SSID));
   }
 
-  LLVM_ATTRIBUTE_DEPRECATED(
-      Value *CreateGEP(Value *Ptr, ArrayRef<Value *> IdxList,
-                       const Twine &Name = ""),
-      "Use the version with explicit element type instead") {
-    return CreateGEP(Ptr->getType()->getScalarType()->getPointerElementType(),
-                     Ptr, IdxList, Name);
-  }
-
   Value *CreateGEP(Type *Ty, Value *Ptr, ArrayRef<Value *> IdxList,
-                   const Twine &Name = "") {
-    if (auto *PC = dyn_cast<Constant>(Ptr)) {
-      // Every index must be constant.
-      size_t i, e;
-      for (i = 0, e = IdxList.size(); i != e; ++i)
-        if (!isa<Constant>(IdxList[i]))
-          break;
-      if (i == e)
-        return Insert(Folder.CreateGetElementPtr(Ty, PC, IdxList), Name);
-    }
-    return Insert(GetElementPtrInst::Create(Ty, Ptr, IdxList), Name);
-  }
-
-  LLVM_ATTRIBUTE_DEPRECATED(
-      Value *CreateInBoundsGEP(Value *Ptr, ArrayRef<Value *> IdxList,
-                               const Twine &Name = ""),
-      "Use the version with explicit element type instead") {
-    return CreateInBoundsGEP(
-        Ptr->getType()->getScalarType()->getPointerElementType(), Ptr, IdxList,
-        Name);
+                   const Twine &Name = "", bool IsInBounds = false) {
+    if (auto *V = Folder.FoldGEP(Ty, Ptr, IdxList, IsInBounds))
+      return V;
+    return Insert(IsInBounds
+                      ? GetElementPtrInst::CreateInBounds(Ty, Ptr, IdxList)
+                      : GetElementPtrInst::Create(Ty, Ptr, IdxList),
+                  Name);
   }
 
   Value *CreateInBoundsGEP(Type *Ty, Value *Ptr, ArrayRef<Value *> IdxList,
                            const Twine &Name = "") {
-    if (auto *PC = dyn_cast<Constant>(Ptr)) {
-      // Every index must be constant.
-      size_t i, e;
-      for (i = 0, e = IdxList.size(); i != e; ++i)
-        if (!isa<Constant>(IdxList[i]))
-          break;
-      if (i == e)
-        return Insert(Folder.CreateInBoundsGetElementPtr(Ty, PC, IdxList),
-                      Name);
-    }
-    return Insert(GetElementPtrInst::CreateInBounds(Ty, Ptr, IdxList), Name);
-  }
-
-  Value *CreateGEP(Type *Ty, Value *Ptr, Value *Idx, const Twine &Name = "") {
-    if (auto *PC = dyn_cast<Constant>(Ptr))
-      if (auto *IC = dyn_cast<Constant>(Idx))
-        return Insert(Folder.CreateGetElementPtr(Ty, PC, IC), Name);
-    return Insert(GetElementPtrInst::Create(Ty, Ptr, Idx), Name);
-  }
-
-  Value *CreateInBoundsGEP(Type *Ty, Value *Ptr, Value *Idx,
-                           const Twine &Name = "") {
-    if (auto *PC = dyn_cast<Constant>(Ptr))
-      if (auto *IC = dyn_cast<Constant>(Idx))
-        return Insert(Folder.CreateInBoundsGetElementPtr(Ty, PC, IC), Name);
-    return Insert(GetElementPtrInst::CreateInBounds(Ty, Ptr, Idx), Name);
-  }
-
-  LLVM_ATTRIBUTE_DEPRECATED(
-      Value *CreateConstGEP1_32(Value *Ptr, unsigned Idx0,
-                                const Twine &Name = ""),
-      "Use the version with explicit element type instead") {
-    return CreateConstGEP1_32(
-        Ptr->getType()->getScalarType()->getPointerElementType(), Ptr, Idx0,
-        Name);
+    return CreateGEP(Ty, Ptr, IdxList, Name, /* IsInBounds */ true);
   }
 
   Value *CreateConstGEP1_32(Type *Ty, Value *Ptr, unsigned Idx0,
                             const Twine &Name = "") {
     Value *Idx = ConstantInt::get(Type::getInt32Ty(Context), Idx0);
 
-    if (auto *PC = dyn_cast<Constant>(Ptr))
-      return Insert(Folder.CreateGetElementPtr(Ty, PC, Idx), Name);
+    if (auto *V = Folder.FoldGEP(Ty, Ptr, Idx, /*IsInBounds=*/false))
+      return V;
 
     return Insert(GetElementPtrInst::Create(Ty, Ptr, Idx), Name);
   }
@@ -1872,8 +1751,8 @@ public:
                                     const Twine &Name = "") {
     Value *Idx = ConstantInt::get(Type::getInt32Ty(Context), Idx0);
 
-    if (auto *PC = dyn_cast<Constant>(Ptr))
-      return Insert(Folder.CreateInBoundsGetElementPtr(Ty, PC, Idx), Name);
+    if (auto *V = Folder.FoldGEP(Ty, Ptr, Idx, /*IsInBounds=*/true))
+      return V;
 
     return Insert(GetElementPtrInst::CreateInBounds(Ty, Ptr, Idx), Name);
   }
@@ -1885,8 +1764,8 @@ public:
       ConstantInt::get(Type::getInt32Ty(Context), Idx1)
     };
 
-    if (auto *PC = dyn_cast<Constant>(Ptr))
-      return Insert(Folder.CreateGetElementPtr(Ty, PC, Idxs), Name);
+    if (auto *V = Folder.FoldGEP(Ty, Ptr, Idxs, /*IsInBounds=*/false))
+      return V;
 
     return Insert(GetElementPtrInst::Create(Ty, Ptr, Idxs), Name);
   }
@@ -1898,8 +1777,8 @@ public:
       ConstantInt::get(Type::getInt32Ty(Context), Idx1)
     };
 
-    if (auto *PC = dyn_cast<Constant>(Ptr))
-      return Insert(Folder.CreateInBoundsGetElementPtr(Ty, PC, Idxs), Name);
+    if (auto *V = Folder.FoldGEP(Ty, Ptr, Idxs, /*IsInBounds=*/true))
+      return V;
 
     return Insert(GetElementPtrInst::CreateInBounds(Ty, Ptr, Idxs), Name);
   }
@@ -1908,38 +1787,20 @@ public:
                             const Twine &Name = "") {
     Value *Idx = ConstantInt::get(Type::getInt64Ty(Context), Idx0);
 
-    if (auto *PC = dyn_cast<Constant>(Ptr))
-      return Insert(Folder.CreateGetElementPtr(Ty, PC, Idx), Name);
+    if (auto *V = Folder.FoldGEP(Ty, Ptr, Idx, /*IsInBounds=*/false))
+      return V;
 
     return Insert(GetElementPtrInst::Create(Ty, Ptr, Idx), Name);
-  }
-
-  LLVM_ATTRIBUTE_DEPRECATED(
-      Value *CreateConstGEP1_64(Value *Ptr, uint64_t Idx0,
-                                const Twine &Name = ""),
-      "Use the version with explicit element type instead") {
-    return CreateConstGEP1_64(
-        Ptr->getType()->getScalarType()->getPointerElementType(), Ptr, Idx0,
-        Name);
   }
 
   Value *CreateConstInBoundsGEP1_64(Type *Ty, Value *Ptr, uint64_t Idx0,
                                     const Twine &Name = "") {
     Value *Idx = ConstantInt::get(Type::getInt64Ty(Context), Idx0);
 
-    if (auto *PC = dyn_cast<Constant>(Ptr))
-      return Insert(Folder.CreateInBoundsGetElementPtr(Ty, PC, Idx), Name);
+    if (auto *V = Folder.FoldGEP(Ty, Ptr, Idx, /*IsInBounds=*/true))
+      return V;
 
     return Insert(GetElementPtrInst::CreateInBounds(Ty, Ptr, Idx), Name);
-  }
-
-  LLVM_ATTRIBUTE_DEPRECATED(
-      Value *CreateConstInBoundsGEP1_64(Value *Ptr, uint64_t Idx0,
-                                        const Twine &Name = ""),
-      "Use the version with explicit element type instead") {
-    return CreateConstInBoundsGEP1_64(
-        Ptr->getType()->getScalarType()->getPointerElementType(), Ptr, Idx0,
-        Name);
   }
 
   Value *CreateConstGEP2_64(Type *Ty, Value *Ptr, uint64_t Idx0, uint64_t Idx1,
@@ -1949,19 +1810,10 @@ public:
       ConstantInt::get(Type::getInt64Ty(Context), Idx1)
     };
 
-    if (auto *PC = dyn_cast<Constant>(Ptr))
-      return Insert(Folder.CreateGetElementPtr(Ty, PC, Idxs), Name);
+    if (auto *V = Folder.FoldGEP(Ty, Ptr, Idxs, /*IsInBounds=*/false))
+      return V;
 
     return Insert(GetElementPtrInst::Create(Ty, Ptr, Idxs), Name);
-  }
-
-  LLVM_ATTRIBUTE_DEPRECATED(
-      Value *CreateConstGEP2_64(Value *Ptr, uint64_t Idx0, uint64_t Idx1,
-                                const Twine &Name = ""),
-      "Use the version with explicit element type instead") {
-    return CreateConstGEP2_64(
-        Ptr->getType()->getScalarType()->getPointerElementType(), Ptr, Idx0,
-        Idx1, Name);
   }
 
   Value *CreateConstInBoundsGEP2_64(Type *Ty, Value *Ptr, uint64_t Idx0,
@@ -1971,32 +1823,15 @@ public:
       ConstantInt::get(Type::getInt64Ty(Context), Idx1)
     };
 
-    if (auto *PC = dyn_cast<Constant>(Ptr))
-      return Insert(Folder.CreateInBoundsGetElementPtr(Ty, PC, Idxs), Name);
+    if (auto *V = Folder.FoldGEP(Ty, Ptr, Idxs, /*IsInBounds=*/true))
+      return V;
 
     return Insert(GetElementPtrInst::CreateInBounds(Ty, Ptr, Idxs), Name);
-  }
-
-  LLVM_ATTRIBUTE_DEPRECATED(
-      Value *CreateConstInBoundsGEP2_64(Value *Ptr, uint64_t Idx0,
-                                        uint64_t Idx1, const Twine &Name = ""),
-      "Use the version with explicit element type instead") {
-    return CreateConstInBoundsGEP2_64(
-        Ptr->getType()->getScalarType()->getPointerElementType(), Ptr, Idx0,
-        Idx1, Name);
   }
 
   Value *CreateStructGEP(Type *Ty, Value *Ptr, unsigned Idx,
                          const Twine &Name = "") {
     return CreateConstInBoundsGEP2_32(Ty, Ptr, 0, Idx, Name);
-  }
-
-  LLVM_ATTRIBUTE_DEPRECATED(
-      Value *CreateStructGEP(Value *Ptr, unsigned Idx, const Twine &Name = ""),
-      "Use the version with explicit element type instead") {
-    return CreateConstInBoundsGEP2_32(
-        Ptr->getType()->getScalarType()->getPointerElementType(), Ptr, 0, Idx,
-        Name);
   }
 
   /// Same as CreateGlobalString, but return a pointer with "i8*" type
@@ -2340,9 +2175,8 @@ public:
 
   Value *CreateICmp(CmpInst::Predicate P, Value *LHS, Value *RHS,
                     const Twine &Name = "") {
-    if (auto *LC = dyn_cast<Constant>(LHS))
-      if (auto *RC = dyn_cast<Constant>(RHS))
-        return Insert(Folder.CreateICmp(P, LC, RC), Name);
+    if (auto *V = Folder.FoldICmp(P, LHS, RHS))
+      return V;
     return Insert(new ICmpInst(P, LHS, RHS), Name);
   }
 
@@ -2452,6 +2286,16 @@ public:
     return CreateExtractElement(Vec, getInt64(Idx), Name);
   }
 
+  Value *CreateInsertElement(Type *VecTy, Value *NewElt, Value *Idx,
+                             const Twine &Name = "") {
+    return CreateInsertElement(PoisonValue::get(VecTy), NewElt, Idx, Name);
+  }
+
+  Value *CreateInsertElement(Type *VecTy, Value *NewElt, uint64_t Idx,
+                             const Twine &Name = "") {
+    return CreateInsertElement(PoisonValue::get(VecTy), NewElt, Idx, Name);
+  }
+
   Value *CreateInsertElement(Value *Vec, Value *NewElt, Value *Idx,
                              const Twine &Name = "") {
     if (auto *VC = dyn_cast<Constant>(Vec))
@@ -2473,15 +2317,6 @@ public:
     return CreateShuffleVector(V1, V2, IntMask, Name);
   }
 
-  LLVM_ATTRIBUTE_DEPRECATED(Value *CreateShuffleVector(Value *V1, Value *V2,
-                                                       ArrayRef<uint32_t> Mask,
-                                                       const Twine &Name = ""),
-                            "Pass indices as 'int' instead") {
-    SmallVector<int, 16> IntMask;
-    IntMask.assign(Mask.begin(), Mask.end());
-    return CreateShuffleVector(V1, V2, IntMask, Name);
-  }
-
   /// See class ShuffleVectorInst for a description of the mask representation.
   Value *CreateShuffleVector(Value *V1, Value *V2, ArrayRef<int> Mask,
                              const Twine &Name = "") {
@@ -2498,20 +2333,17 @@ public:
     return CreateShuffleVector(V, PoisonValue::get(V->getType()), Mask, Name);
   }
 
-  Value *CreateExtractValue(Value *Agg,
-                            ArrayRef<unsigned> Idxs,
+  Value *CreateExtractValue(Value *Agg, ArrayRef<unsigned> Idxs,
                             const Twine &Name = "") {
-    if (auto *AggC = dyn_cast<Constant>(Agg))
-      return Insert(Folder.CreateExtractValue(AggC, Idxs), Name);
+    if (auto *V = Folder.FoldExtractValue(Agg, Idxs))
+      return V;
     return Insert(ExtractValueInst::Create(Agg, Idxs), Name);
   }
 
-  Value *CreateInsertValue(Value *Agg, Value *Val,
-                           ArrayRef<unsigned> Idxs,
+  Value *CreateInsertValue(Value *Agg, Value *Val, ArrayRef<unsigned> Idxs,
                            const Twine &Name = "") {
-    if (auto *AggC = dyn_cast<Constant>(Agg))
-      if (auto *ValC = dyn_cast<Constant>(Val))
-        return Insert(Folder.CreateInsertValue(AggC, ValC, Idxs), Name);
+    if (auto *V = Folder.FoldInsertValue(Agg, Val, Idxs))
+      return V;
     return Insert(InsertValueInst::Create(Agg, Val, Idxs), Name);
   }
 
@@ -2528,16 +2360,25 @@ public:
   // Utility creation methods
   //===--------------------------------------------------------------------===//
 
-  /// Return an i1 value testing if \p Arg is null.
+  /// Return a boolean value testing if \p Arg == 0.
   Value *CreateIsNull(Value *Arg, const Twine &Name = "") {
-    return CreateICmpEQ(Arg, Constant::getNullValue(Arg->getType()),
-                        Name);
+    return CreateICmpEQ(Arg, ConstantInt::getNullValue(Arg->getType()), Name);
   }
 
-  /// Return an i1 value testing if \p Arg is not null.
+  /// Return a boolean value testing if \p Arg != 0.
   Value *CreateIsNotNull(Value *Arg, const Twine &Name = "") {
-    return CreateICmpNE(Arg, Constant::getNullValue(Arg->getType()),
-                        Name);
+    return CreateICmpNE(Arg, ConstantInt::getNullValue(Arg->getType()), Name);
+  }
+
+  /// Return a boolean value testing if \p Arg < 0.
+  Value *CreateIsNeg(Value *Arg, const Twine &Name = "") {
+    return CreateICmpSLT(Arg, ConstantInt::getNullValue(Arg->getType()), Name);
+  }
+
+  /// Return a boolean value testing if \p Arg > -1.
+  Value *CreateIsNotNeg(Value *Arg, const Twine &Name = "") {
+    return CreateICmpSGT(Arg, ConstantInt::getAllOnesValue(Arg->getType()),
+                         Name);
   }
 
   /// Return the i64 difference between two pointer values, dividing out
@@ -2546,7 +2387,8 @@ public:
   /// This is intended to implement C-style pointer subtraction. As such, the
   /// pointers must be appropriately aligned for their element types and
   /// pointing into the same object.
-  Value *CreatePtrDiff(Value *LHS, Value *RHS, const Twine &Name = "");
+  Value *CreatePtrDiff(Type *ElemTy, Value *LHS, Value *RHS,
+                       const Twine &Name = "");
 
   /// Create a launder.invariant.group intrinsic call. If Ptr type is
   /// different from pointer to i8, it's casted to pointer to i8 in the same

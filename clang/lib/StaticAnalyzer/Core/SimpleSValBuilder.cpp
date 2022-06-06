@@ -21,6 +21,35 @@ using namespace ento;
 
 namespace {
 class SimpleSValBuilder : public SValBuilder {
+
+  // With one `simplifySValOnce` call, a compound symbols might collapse to
+  // simpler symbol tree that is still possible to further simplify. Thus, we
+  // do the simplification on a new symbol tree until we reach the simplest
+  // form, i.e. the fixpoint.
+  // Consider the following symbol `(b * b) * b * b` which has this tree:
+  //       *
+  //      / \
+  //     *   b
+  //    /  \
+  //   /    b
+  // (b * b)
+  // Now, if the `b * b == 1` new constraint is added then during the first
+  // iteration we have the following transformations:
+  //       *                  *
+  //      / \                / \
+  //     *   b     -->      b   b
+  //    /  \
+  //   /    b
+  //  1
+  // We need another iteration to reach the final result `1`.
+  SVal simplifyUntilFixpoint(ProgramStateRef State, SVal Val);
+
+  // Recursively descends into symbolic expressions and replaces symbols
+  // with their known values (in the sense of the getKnownValue() method).
+  // We traverse the symbol tree and query the constraint values for the
+  // sub-trees and if a value is a constant we do the constant folding.
+  SVal simplifySValOnce(ProgramStateRef State, SVal V);
+
 public:
   SimpleSValBuilder(llvm::BumpPtrAllocator &alloc, ASTContext &context,
                     ProgramStateManager &stateMgr)
@@ -40,8 +69,6 @@ public:
   ///  (integer) value, that value is returned. Otherwise, returns NULL.
   const llvm::APSInt *getKnownValue(ProgramStateRef state, SVal V) override;
 
-  /// Recursively descends into symbolic expressions and replaces symbols
-  /// with their known values (in the sense of the getKnownValue() method).
   SVal simplifySVal(ProgramStateRef State, SVal V) override;
 
   SVal MakeSymIntVal(const SymExpr *LHS, BinaryOperator::Opcode op,
@@ -75,6 +102,23 @@ SVal SimpleSValBuilder::evalComplement(NonLoc X) {
   default:
     return UnknownVal();
   }
+}
+
+// Checks if the negation the value and flipping sign preserve
+// the semantics on the operation in the resultType
+static bool isNegationValuePreserving(const llvm::APSInt &Value,
+                                      APSIntType ResultType) {
+  const unsigned ValueBits = Value.getSignificantBits();
+  if (ValueBits == ResultType.getBitWidth()) {
+    // The value is the lowest negative value that is representable
+    // in signed integer with bitWith of result type. The
+    // negation is representable if resultType is unsigned.
+    return ResultType.isUnsigned();
+  }
+
+  // If resultType bitWith is higher that number of bits required
+  // to represent RHS, the sign flip produce same value.
+  return ValueBits < ResultType.getBitWidth();
 }
 
 //===----------------------------------------------------------------------===//
@@ -128,14 +172,14 @@ SVal SimpleSValBuilder::MakeSymIntVal(const SymExpr *LHS,
     // a&0 and a&(~0)
     if (RHS == 0)
       return makeIntVal(0, resultTy);
-    else if (RHS.isAllOnesValue())
+    else if (RHS.isAllOnes())
       isIdempotent = true;
     break;
   case BO_Or:
     // a|0 and a|(~0)
     if (RHS == 0)
       isIdempotent = true;
-    else if (RHS.isAllOnesValue()) {
+    else if (RHS.isAllOnes()) {
       const llvm::APSInt &Result = BasicVals.Convert(resultTy, RHS);
       return nonloc::ConcreteInt(Result);
     }
@@ -169,6 +213,17 @@ SVal SimpleSValBuilder::MakeSymIntVal(const SymExpr *LHS,
       // (For the opposite case, the value is already unsigned.)
       if (RHS.isSigned() && !SymbolType->isSignedIntegerOrEnumerationType())
         ConvertedRHS = &BasicVals.Convert(SymbolType, RHS);
+    }
+  } else if (BinaryOperator::isAdditiveOp(op) && RHS.isNegative()) {
+    // Change a+(-N) into a-N, and a-(-N) into a+N
+    // Adjust addition/subtraction of negative value, to
+    // subtraction/addition of the negated value.
+    APSIntType resultIntTy = BasicVals.getAPSIntType(resultTy);
+    if (isNegationValuePreserving(RHS, resultIntTy)) {
+      ConvertedRHS = &BasicVals.getValue(-resultIntTy.convert(RHS));
+      op = (op == BO_Add) ? BO_Sub : BO_Add;
+    } else {
+      ConvertedRHS = &BasicVals.Convert(resultTy, RHS);
     }
   } else
     ConvertedRHS = &BasicVals.Convert(resultTy, RHS);
@@ -372,6 +427,15 @@ SVal SimpleSValBuilder::evalBinOpNN(ProgramStateRef state,
   NonLoc InputLHS = lhs;
   NonLoc InputRHS = rhs;
 
+  // Constraints may have changed since the creation of a bound SVal. Check if
+  // the values can be simplified based on those new constraints.
+  SVal simplifiedLhs = simplifySVal(state, lhs);
+  SVal simplifiedRhs = simplifySVal(state, rhs);
+  if (auto simplifiedLhsAsNonLoc = simplifiedLhs.getAs<NonLoc>())
+    lhs = *simplifiedLhsAsNonLoc;
+  if (auto simplifiedRhsAsNonLoc = simplifiedRhs.getAs<NonLoc>())
+    rhs = *simplifiedRhsAsNonLoc;
+
   // Handle trivial case where left-side and right-side are the same.
   if (lhs == rhs)
     switch (op) {
@@ -396,7 +460,7 @@ SVal SimpleSValBuilder::evalBinOpNN(ProgramStateRef state,
         return evalCast(lhs, resultTy, QualType{});
     }
 
-  while (1) {
+  while (true) {
     switch (lhs.getSubKind()) {
     default:
       return makeSymExprValNN(op, lhs, rhs, resultTy);
@@ -509,7 +573,7 @@ SVal SimpleSValBuilder::evalBinOpNN(ProgramStateRef state,
         continue;
       case BO_Shr:
         // (~0)>>a
-        if (LHSValue.isAllOnesValue() && LHSValue.isSigned())
+        if (LHSValue.isAllOnes() && LHSValue.isSigned())
           return evalCast(lhs, resultTy, QualType{});
         LLVM_FALLTHROUGH;
       case BO_Shl:
@@ -600,16 +664,26 @@ SVal SimpleSValBuilder::evalBinOpNN(ProgramStateRef state,
               const llvm::APSInt &first = IntType.convert(symIntExpr->getRHS());
               const llvm::APSInt &second = IntType.convert(*RHSValue);
 
+              // If the op and lop agrees, then we just need to
+              // sum the constants. Otherwise, we change to operation
+              // type if substraction would produce negative value
+              // (and cause overflow for unsigned integers),
+              // as consequence x+1U-10 produces x-9U, instead
+              // of x+4294967287U, that would be produced without this
+              // additional check.
               const llvm::APSInt *newRHS;
-              if (lop == op)
+              if (lop == op) {
                 newRHS = BasicVals.evalAPSInt(BO_Add, first, second);
-              else
+              } else if (first >= second) {
                 newRHS = BasicVals.evalAPSInt(BO_Sub, first, second);
+                op = lop;
+              } else {
+                newRHS = BasicVals.evalAPSInt(BO_Sub, second, first);
+              }
 
               assert(newRHS && "Invalid operation despite common type!");
               rhs = nonloc::ConcreteInt(*newRHS);
               lhs = nonloc::SymbolVal(symIntExpr->getLHS());
-              op = lop;
               continue;
             }
           }
@@ -618,16 +692,6 @@ SVal SimpleSValBuilder::evalBinOpNN(ProgramStateRef state,
           return MakeSymIntVal(symIntExpr, op, *RHSValue, resultTy);
         }
       }
-
-      // Does the symbolic expression simplify to a constant?
-      // If so, "fold" the constant by setting 'lhs' to a ConcreteInt
-      // and try again.
-      SVal simplifiedLhs = simplifySVal(state, lhs);
-      if (simplifiedLhs != lhs)
-        if (auto simplifiedLhsAsNonLoc = simplifiedLhs.getAs<NonLoc>()) {
-          lhs = *simplifiedLhsAsNonLoc;
-          continue;
-        }
 
       // Is the RHS a constant?
       if (const llvm::APSInt *RHSValue = getKnownValue(state, rhs))
@@ -689,11 +753,41 @@ static SVal evalBinOpFieldRegionFieldRegion(const FieldRegion *LeftFR,
   llvm_unreachable("Fields not found in parent record's definition");
 }
 
+// This is used in debug builds only for now because some downstream users
+// may hit this assert in their subsequent merges.
+// There are still places in the analyzer where equal bitwidth Locs
+// are compared, and need to be found and corrected. Recent previous fixes have
+// addressed the known problems of making NULLs with specific bitwidths
+// for Loc comparisons along with deprecation of APIs for the same purpose.
+//
+static void assertEqualBitWidths(ProgramStateRef State, Loc RhsLoc,
+                                 Loc LhsLoc) {
+  // Implements a "best effort" check for RhsLoc and LhsLoc bit widths
+  ASTContext &Ctx = State->getStateManager().getContext();
+  uint64_t RhsBitwidth =
+      RhsLoc.getType(Ctx).isNull() ? 0 : Ctx.getTypeSize(RhsLoc.getType(Ctx));
+  uint64_t LhsBitwidth =
+      LhsLoc.getType(Ctx).isNull() ? 0 : Ctx.getTypeSize(LhsLoc.getType(Ctx));
+  if (RhsBitwidth && LhsBitwidth &&
+      (LhsLoc.getSubKind() == RhsLoc.getSubKind())) {
+    assert(RhsBitwidth == LhsBitwidth &&
+           "RhsLoc and LhsLoc bitwidth must be same!");
+  }
+}
+
 // FIXME: all this logic will change if/when we have MemRegion::getLocation().
 SVal SimpleSValBuilder::evalBinOpLL(ProgramStateRef state,
                                   BinaryOperator::Opcode op,
                                   Loc lhs, Loc rhs,
                                   QualType resultTy) {
+
+  // Assert that bitwidth of lhs and rhs are the same.
+  // This can happen if two different address spaces are used,
+  // and the bitwidths of the address spaces are different.
+  // See LIT case clang/test/Analysis/cstring-checker-addressspace.c
+  // FIXME: See comment above in the function assertEqualBitWidths
+  assertEqualBitWidths(state, rhs, lhs);
+
   // Only comparisons and subtractions are valid operations on two pointers.
   // See [C99 6.5.5 through 6.5.14] or [C++0x 5.6 through 5.15].
   // However, if a pointer is casted to an integer, evalBinOpNN may end up
@@ -1103,11 +1197,23 @@ const llvm::APSInt *SimpleSValBuilder::getKnownValue(ProgramStateRef state,
   if (SymbolRef Sym = V.getAsSymbol())
     return state->getConstraintManager().getSymVal(state, Sym);
 
-  // FIXME: Add support for SymExprs.
   return nullptr;
 }
 
+SVal SimpleSValBuilder::simplifyUntilFixpoint(ProgramStateRef State, SVal Val) {
+  SVal SimplifiedVal = simplifySValOnce(State, Val);
+  while (SimplifiedVal != Val) {
+    Val = SimplifiedVal;
+    SimplifiedVal = simplifySValOnce(State, Val);
+  }
+  return SimplifiedVal;
+}
+
 SVal SimpleSValBuilder::simplifySVal(ProgramStateRef State, SVal V) {
+  return simplifyUntilFixpoint(State, V);
+}
+
+SVal SimpleSValBuilder::simplifySValOnce(ProgramStateRef State, SVal V) {
   // For now, this function tries to constant-fold symbols inside a
   // nonloc::SymbolVal, and does nothing else. More simplifications should
   // be possible, such as constant-folding an index in an ElementRegion.
@@ -1135,6 +1241,24 @@ SVal SimpleSValBuilder::simplifySVal(ProgramStateRef State, SVal V) {
       return cache(Sym, SVB.makeSymbolVal(Sym));
     }
 
+    // Return the known const value for the Sym if available, or return Undef
+    // otherwise.
+    SVal getConst(SymbolRef Sym) {
+      const llvm::APSInt *Const =
+          State->getConstraintManager().getSymVal(State, Sym);
+      if (Const)
+        return Loc::isLocType(Sym->getType()) ? (SVal)SVB.makeIntLocVal(*Const)
+                                              : (SVal)SVB.makeIntVal(*Const);
+      return UndefinedVal();
+    }
+
+    SVal getConstOrVisit(SymbolRef Sym) {
+      const SVal Ret = getConst(Sym);
+      if (Ret.isUndef())
+        return Visit(Sym);
+      return Ret;
+    }
+
   public:
     Simplifier(ProgramStateRef State)
         : State(State), SVB(State->getStateManager().getSValBuilder()) {}
@@ -1148,15 +1272,14 @@ SVal SimpleSValBuilder::simplifySVal(ProgramStateRef State, SVal V) {
       return SVB.makeSymbolVal(S);
     }
 
-    // TODO: Support SymbolCast. Support IntSymExpr when/if we actually
-    // start producing them.
+    // TODO: Support SymbolCast.
 
     SVal VisitSymIntExpr(const SymIntExpr *S) {
       auto I = Cached.find(S);
       if (I != Cached.end())
         return I->second;
 
-      SVal LHS = Visit(S->getLHS());
+      SVal LHS = getConstOrVisit(S->getLHS());
       if (isUnchanged(S->getLHS(), LHS))
         return skip(S);
 
@@ -1183,6 +1306,20 @@ SVal SimpleSValBuilder::simplifySVal(ProgramStateRef State, SVal V) {
           S, SVB.evalBinOp(State, S->getOpcode(), LHS, RHS, S->getType()));
     }
 
+    SVal VisitIntSymExpr(const IntSymExpr *S) {
+      auto I = Cached.find(S);
+      if (I != Cached.end())
+        return I->second;
+
+      SVal RHS = getConstOrVisit(S->getRHS());
+      if (isUnchanged(S->getRHS(), RHS))
+        return skip(S);
+
+      SVal LHS = SVB.makeIntVal(S->getLHS());
+      return cache(
+          S, SVB.evalBinOp(State, S->getOpcode(), LHS, RHS, S->getType()));
+    }
+
     SVal VisitSymSymExpr(const SymSymExpr *S) {
       auto I = Cached.find(S);
       if (I != Cached.end())
@@ -1196,8 +1333,9 @@ SVal SimpleSValBuilder::simplifySVal(ProgramStateRef State, SVal V) {
           Loc::isLocType(S->getRHS()->getType()))
         return skip(S);
 
-      SVal LHS = Visit(S->getLHS());
-      SVal RHS = Visit(S->getRHS());
+      SVal LHS = getConstOrVisit(S->getLHS());
+      SVal RHS = getConstOrVisit(S->getRHS());
+
       if (isUnchanged(S->getLHS(), LHS) && isUnchanged(S->getRHS(), RHS))
         return skip(S);
 

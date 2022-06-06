@@ -84,15 +84,12 @@ const char *ExtractTokenUpToDelimiter(const char *str, const char *delimiter,
 
 SymbolizedStack *Symbolizer::SymbolizePC(uptr addr) {
   Lock l(&mu_);
-  const char *module_name = nullptr;
-  uptr module_offset;
-  ModuleArch arch;
   SymbolizedStack *res = SymbolizedStack::New(addr);
-  if (!FindModuleNameAndOffsetForAddress(addr, &module_name, &module_offset,
-                                         &arch))
+  auto *mod = FindModuleForAddress(addr);
+  if (!mod)
     return res;
   // Always fill data about module name and offset.
-  res->info.FillModuleInfo(module_name, module_offset, arch);
+  res->info.FillModuleInfo(*mod);
   for (auto &tool : tools_) {
     SymbolizerScope sym_scope(this);
     if (tool.SymbolizePC(addr, res)) {
@@ -240,7 +237,7 @@ const LoadedModule *Symbolizer::FindModuleForAddress(uptr address) {
 class LLVMSymbolizerProcess final : public SymbolizerProcess {
  public:
   explicit LLVMSymbolizerProcess(const char *path)
-      : SymbolizerProcess(path, /*use_posix_spawn=*/SANITIZER_MAC) {}
+      : SymbolizerProcess(path, /*use_posix_spawn=*/SANITIZER_APPLE) {}
 
  private:
   bool ReachedEndOfOutput(const char *buffer, uptr length) const override {
@@ -277,14 +274,17 @@ class LLVMSymbolizerProcess final : public SymbolizerProcess {
     const char* const kSymbolizerArch = "--default-arch=unknown";
 #endif
 
-    const char *const inline_flag = common_flags()->symbolize_inline_frames
-                                        ? "--inlines"
-                                        : "--no-inlines";
+    const char *const demangle_flag =
+        common_flags()->demangle ? "--demangle" : "--no-demangle";
+    const char *const inline_flag =
+        common_flags()->symbolize_inline_frames ? "--inlines" : "--no-inlines";
     int i = 0;
     argv[i++] = path_to_binary;
+    argv[i++] = demangle_flag;
     argv[i++] = inline_flag;
     argv[i++] = kSymbolizerArch;
     argv[i++] = nullptr;
+    CHECK_LE(i, kArgVMax);
   }
 };
 

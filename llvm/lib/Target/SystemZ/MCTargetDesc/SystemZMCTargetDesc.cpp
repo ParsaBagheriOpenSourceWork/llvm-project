@@ -13,11 +13,12 @@
 #include "TargetInfo/SystemZTargetInfo.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCDwarf.h"
+#include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCInstrInfo.h"
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCSubtargetInfo.h"
-#include "llvm/Support/TargetRegistry.h"
+#include "llvm/MC/TargetRegistry.h"
 
 using namespace llvm;
 
@@ -151,7 +152,10 @@ unsigned SystemZMC::getFirstReg(unsigned Reg) {
 static MCAsmInfo *createSystemZMCAsmInfo(const MCRegisterInfo &MRI,
                                          const Triple &TT,
                                          const MCTargetOptions &Options) {
-  MCAsmInfo *MAI = new SystemZMCAsmInfo(TT);
+  if (TT.isOSzOS())
+    return new SystemZMCAsmInfoGOFF(TT);
+
+  MCAsmInfo *MAI = new SystemZMCAsmInfoELF(TT);
   MCCFIInstruction Inst = MCCFIInstruction::cfiDefCfa(
       nullptr, MRI.getDwarfRegNum(SystemZ::R15D, true),
       SystemZMC::ELFCFAOffsetFromInitialSP);

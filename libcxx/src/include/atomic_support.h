@@ -9,8 +9,8 @@
 #ifndef ATOMIC_SUPPORT_H
 #define ATOMIC_SUPPORT_H
 
-#include "__config"
-#include "memory" // for __libcpp_relaxed_load
+#include <__config>
+#include <memory> // for __libcpp_relaxed_load
 
 #if defined(__clang__) && __has_builtin(__atomic_load_n)             \
                        && __has_builtin(__atomic_store_n)            \
@@ -146,7 +146,7 @@ _ValueType __libcpp_atomic_add(_ValueType* __val, _AddType __a,
 template <class _ValueType>
 inline _LIBCPP_INLINE_VISIBILITY
 _ValueType __libcpp_atomic_exchange(_ValueType* __target,
-                                    _ValueType __value, int __order = _AO_Seq)
+                                    _ValueType __value, int = _AO_Seq)
 {
     _ValueType old = *__target;
     *__target = __value;

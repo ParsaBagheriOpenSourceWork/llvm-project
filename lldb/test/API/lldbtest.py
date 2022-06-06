@@ -50,19 +50,16 @@ class LLDBTest(TestFormat):
         # build with.
         executable = test.config.python_executable
 
+        isLuaTest = testFile == test.config.lua_test_entry
+
         # On Windows, the system does not always correctly interpret
         # shebang lines.  To make sure we can execute the tests, add
         # python exe as the first parameter of the command.
         cmd = [executable] + self.dotest_cmd + [testPath, '-p', testFile]
 
-        if 'lldb-repro-capture' in test.config.available_features or \
-           'lldb-repro-replay' in test.config.available_features:
-            reproducer_path = os.path.join(
-                test.config.lldb_reproducer_directory, testFile)
-            if 'lldb-repro-capture' in test.config.available_features:
-                cmd.extend(['--capture-path', reproducer_path])
-            else:
-                cmd.extend(['--replay-path', reproducer_path])
+        if isLuaTest:
+            luaExecutable = test.config.lua_executable
+            cmd.extend(['--env', 'LUA_EXECUTABLE=%s' % luaExecutable])
 
         timeoutInfo = None
         try:
@@ -76,16 +73,6 @@ class LLDBTest(TestFormat):
             exitCode = e.exitCode
             timeoutInfo = 'Reached timeout of {} seconds'.format(
                 litConfig.maxIndividualTestTime)
-
-        if sys.version_info.major == 2:
-            # In Python 2, string objects can contain Unicode characters. Use
-            # the non-strict 'replace' decoding mode. We cannot use the strict
-            # mode right now because lldb's StringPrinter facility and the
-            # Python utf8 decoder have different interpretations of which
-            # characters are "printable". This leads to Python utf8 decoding
-            # exceptions even though lldb is behaving as expected.
-            out = out.decode('utf-8', 'replace')
-            err = err.decode('utf-8', 'replace')
 
         output = """Script:\n--\n%s\n--\nExit Code: %d\n""" % (
             ' '.join(cmd), exitCode)

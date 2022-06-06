@@ -9,12 +9,12 @@
 #ifndef LLVM_LIBC_UTILS_UNITTEST_LIBCTEST_H
 #define LLVM_LIBC_UTILS_UNITTEST_LIBCTEST_H
 
-// This file can only include headers from utils/CPP/ or utils/testutils. No
-// other headers should be included.
+// This file can only include headers from src/__support/CPP/ or
+// utils/testutils. No other headers should be included.
 
 #include "PlatformDefs.h"
 
-#include "utils/CPP/TypeTraits.h"
+#include "src/__support/CPP/TypeTraits.h"
 #include "utils/testutils/ExecuteFunction.h"
 #include "utils/testutils/StreamWrapper.h"
 
@@ -387,19 +387,16 @@ template <typename... Types> using TypeList = internal::TypeList<Types...>;
 #define UNIQUE_VAR(prefix) __CAT(prefix, __LINE__)
 
 #define EXPECT_THAT(MATCH, MATCHER)                                            \
-  do {                                                                         \
+  [&]() -> bool {                                                              \
     auto UNIQUE_VAR(__matcher) = (MATCHER);                                    \
-    this->testMatch(UNIQUE_VAR(__matcher).match((MATCH)),                      \
-                    UNIQUE_VAR(__matcher), #MATCH, #MATCHER, __FILE__,         \
-                    __LINE__);                                                 \
-  } while (0)
+    return this->testMatch(UNIQUE_VAR(__matcher).match((MATCH)),               \
+                           UNIQUE_VAR(__matcher), #MATCH, #MATCHER, __FILE__,  \
+                           __LINE__);                                          \
+  }()
 
 #define ASSERT_THAT(MATCH, MATCHER)                                            \
   do {                                                                         \
-    auto UNIQUE_VAR(__matcher) = (MATCHER);                                    \
-    if (!this->testMatch(UNIQUE_VAR(__matcher).match((MATCH)),                 \
-                         UNIQUE_VAR(__matcher), #MATCH, #MATCHER, __FILE__,    \
-                         __LINE__))                                            \
+    if (!EXPECT_THAT(MATCH, MATCHER))                                          \
       return;                                                                  \
   } while (0)
 

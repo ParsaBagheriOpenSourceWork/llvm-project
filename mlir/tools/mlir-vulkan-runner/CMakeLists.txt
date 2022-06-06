@@ -56,7 +56,9 @@ if (MLIR_ENABLE_VULKAN_RUNNER)
   set(LIBS
     ${conversion_libs}
     MLIRAnalysis
+    MLIRArithmetic
     MLIRExecutionEngine
+    MLIRFunc
     MLIRGPUOps
     MLIRIR
     MLIRJitRunner
@@ -68,11 +70,10 @@ if (MLIR_ENABLE_VULKAN_RUNNER)
     MLIRParser
     MLIRSPIRV
     MLIRSPIRVTransforms
-    MLIRStandard
     MLIRSupport
     MLIRTargetLLVMIRExport
     MLIRTransforms
-    MLIRTranslation
+    MLIRTranslateLib
     ${Vulkan_LIBRARY}
   )
 

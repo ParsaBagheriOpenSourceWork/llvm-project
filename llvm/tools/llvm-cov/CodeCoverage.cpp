@@ -176,8 +176,8 @@ private:
   std::vector<std::pair<std::string, std::unique_ptr<MemoryBuffer>>>
       LoadedSourceFiles;
 
-  /// Whitelist from -name-whitelist to be used for filtering.
-  std::unique_ptr<SpecialCaseList> NameWhitelist;
+  /// Allowlist from -name-allowlist to be used for filtering.
+  std::unique_ptr<SpecialCaseList> NameAllowlist;
 };
 }
 
@@ -209,7 +209,7 @@ void CodeCoverageTool::addCollectedPath(const std::string &Path) {
     error(EC.message(), Path);
     return;
   }
-  sys::path::remove_dots(EffectivePath, /*remove_dot_dots=*/true);
+  sys::path::remove_dots(EffectivePath, /*remove_dot_dot=*/true);
   if (!IgnoreFilenameFilters.matchesFilename(EffectivePath))
     SourceFiles.emplace_back(EffectivePath.str());
   HadSourceFiles = !SourceFiles.empty();
@@ -668,9 +668,16 @@ int CodeCoverageTool::run(Command Cmd, int argc, const char **argv) {
       cl::ZeroOrMore, cl::cat(FilteringCategory));
 
   cl::list<std::string> NameFilterFiles(
-      "name-whitelist", cl::Optional,
+      "name-allowlist", cl::Optional,
       cl::desc("Show code coverage only for functions listed in the given "
                "file"),
+      cl::ZeroOrMore, cl::cat(FilteringCategory));
+
+  // Allow for accepting previous option name.
+  cl::list<std::string> NameFilterFilesDeprecated(
+      "name-whitelist", cl::Optional, cl::Hidden,
+      cl::desc("Show code coverage only for functions listed in the given "
+               "file. Deprecated, use -name-allowlist instead"),
       cl::ZeroOrMore, cl::cat(FilteringCategory));
 
   cl::list<std::string> NameRegexFilters(
@@ -809,23 +816,34 @@ int CodeCoverageTool::run(Command Cmd, int argc, const char **argv) {
       ViewOpts.DemanglerOpts.swap(DemanglerOpts);
     }
 
-    // Read in -name-whitelist files.
-    if (!NameFilterFiles.empty()) {
+    // Read in -name-allowlist files.
+    if (!NameFilterFiles.empty() || !NameFilterFilesDeprecated.empty()) {
       std::string SpecialCaseListErr;
-      NameWhitelist = SpecialCaseList::create(
-          NameFilterFiles, *vfs::getRealFileSystem(), SpecialCaseListErr);
-      if (!NameWhitelist)
+      if (!NameFilterFiles.empty())
+        NameAllowlist = SpecialCaseList::create(
+            NameFilterFiles, *vfs::getRealFileSystem(), SpecialCaseListErr);
+      if (!NameFilterFilesDeprecated.empty())
+        NameAllowlist = SpecialCaseList::create(NameFilterFilesDeprecated,
+                                                *vfs::getRealFileSystem(),
+                                                SpecialCaseListErr);
+
+      if (!NameAllowlist)
         error(SpecialCaseListErr);
     }
 
     // Create the function filters
-    if (!NameFilters.empty() || NameWhitelist || !NameRegexFilters.empty()) {
+    if (!NameFilters.empty() || NameAllowlist || !NameRegexFilters.empty()) {
       auto NameFilterer = std::make_unique<CoverageFilters>();
       for (const auto &Name : NameFilters)
         NameFilterer->push_back(std::make_unique<NameCoverageFilter>(Name));
-      if (NameWhitelist)
-        NameFilterer->push_back(
-            std::make_unique<NameWhitelistCoverageFilter>(*NameWhitelist));
+      if (NameAllowlist) {
+        if (!NameFilterFiles.empty())
+          NameFilterer->push_back(
+              std::make_unique<NameAllowlistCoverageFilter>(*NameAllowlist));
+        if (!NameFilterFilesDeprecated.empty())
+          NameFilterer->push_back(
+              std::make_unique<NameWhitelistCoverageFilter>(*NameAllowlist));
+      }
       for (const auto &Regex : NameRegexFilters)
         NameFilterer->push_back(
             std::make_unique<NameRegexCoverageFilter>(Regex));
@@ -955,6 +973,11 @@ int CodeCoverageTool::doShow(int argc, const char **argv,
       "project-title", cl::Optional,
       cl::desc("Set project title for the coverage report"));
 
+  cl::opt<std::string> CovWatermark(
+      "coverage-watermark", cl::Optional,
+      cl::desc("<high>,<low> value indicate thresholds for high and low"
+               "coverage watermark"));
+
   auto Err = commandLineParser(argc, argv);
   if (Err)
     return Err;
@@ -962,6 +985,47 @@ int CodeCoverageTool::doShow(int argc, const char **argv,
   if (ViewOpts.Format == CoverageViewOptions::OutputFormat::Lcov) {
     error("Lcov format should be used with 'llvm-cov export'.");
     return 1;
+  }
+
+  ViewOpts.HighCovWatermark = 100.0;
+  ViewOpts.LowCovWatermark = 80.0;
+  if (!CovWatermark.empty()) {
+    auto WaterMarkPair = StringRef(CovWatermark).split(',');
+    if (WaterMarkPair.first.empty() || WaterMarkPair.second.empty()) {
+      error("invalid argument '" + CovWatermark +
+                "', must be in format 'high,low'",
+            "-coverage-watermark");
+      return 1;
+    }
+
+    char *EndPointer = nullptr;
+    ViewOpts.HighCovWatermark =
+        strtod(WaterMarkPair.first.begin(), &EndPointer);
+    if (EndPointer != WaterMarkPair.first.end()) {
+      error("invalid number '" + WaterMarkPair.first +
+                "', invalid value for 'high'",
+            "-coverage-watermark");
+      return 1;
+    }
+
+    ViewOpts.LowCovWatermark =
+        strtod(WaterMarkPair.second.begin(), &EndPointer);
+    if (EndPointer != WaterMarkPair.second.end()) {
+      error("invalid number '" + WaterMarkPair.second +
+                "', invalid value for 'low'",
+            "-coverage-watermark");
+      return 1;
+    }
+
+    if (ViewOpts.HighCovWatermark > 100 || ViewOpts.LowCovWatermark < 0 ||
+        ViewOpts.HighCovWatermark <= ViewOpts.LowCovWatermark) {
+      error(
+          "invalid number range '" + CovWatermark +
+              "', must be both high and low should be between 0-100, and high "
+              "> low",
+          "-coverage-watermark");
+      return 1;
+    }
   }
 
   ViewOpts.ShowLineNumbers = true;

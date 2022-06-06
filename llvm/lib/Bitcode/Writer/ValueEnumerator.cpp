@@ -310,8 +310,7 @@ static UseListOrderStack predictUseListOrder(const Module &M) {
   // We want to visit the functions backward now so we can list function-local
   // constants in the last Function they're used in.  Module-level constants
   // have already been visited above.
-  for (auto I = M.rbegin(), E = M.rend(); I != E; ++I) {
-    const Function &F = *I;
+  for (const Function &F : llvm::reverse(M)) {
     if (F.isDeclaration())
       continue;
     for (const BasicBlock &BB : F)
@@ -387,8 +386,10 @@ ValueEnumerator::ValueEnumerator(const Module &M,
   }
 
   // Enumerate the ifuncs.
-  for (const GlobalIFunc &GIF : M.ifuncs())
+  for (const GlobalIFunc &GIF : M.ifuncs()) {
     EnumerateValue(&GIF);
+    EnumerateType(GIF.getValueType());
+  }
 
   // Remember what is the cutoff between globalvalue's and other constants.
   unsigned FirstConstant = Values.size();
@@ -541,9 +542,8 @@ void ValueEnumerator::print(raw_ostream &OS, const ValueMapType &Map,
                             const char *Name) const {
   OS << "Map Name: " << Name << "\n";
   OS << "Size: " << Map.size() << "\n";
-  for (ValueMapType::const_iterator I = Map.begin(),
-         E = Map.end(); I != E; ++I) {
-    const Value *V = I->first;
+  for (const auto &I : Map) {
+    const Value *V = I.first;
     if (V->hasName())
       OS << "Value: " << V->getName();
     else
@@ -569,10 +569,10 @@ void ValueEnumerator::print(raw_ostream &OS, const MetadataMapType &Map,
                             const char *Name) const {
   OS << "Map Name: " << Name << "\n";
   OS << "Size: " << Map.size() << "\n";
-  for (auto I = Map.begin(), E = Map.end(); I != E; ++I) {
-    const Metadata *MD = I->first;
-    OS << "Metadata: slot = " << I->second.ID << "\n";
-    OS << "Metadata: function = " << I->second.F << "\n";
+  for (const auto &I : Map) {
+    const Metadata *MD = I.first;
+    OS << "Metadata: slot = " << I.second.ID << "\n";
+    OS << "Metadata: function = " << I.second.F << "\n";
     MD->print(OS);
     OS << "\n";
   }
@@ -939,9 +939,12 @@ void ValueEnumerator::EnumerateValue(const Value *V) {
            I != E; ++I)
         if (!isa<BasicBlock>(*I)) // Don't enumerate BB operand to BlockAddress.
           EnumerateValue(*I);
-      if (auto *CE = dyn_cast<ConstantExpr>(C))
+      if (auto *CE = dyn_cast<ConstantExpr>(C)) {
         if (CE->getOpcode() == Instruction::ShuffleVector)
           EnumerateValue(CE->getShuffleMaskForBitcode());
+        if (auto *GEP = dyn_cast<GEPOperator>(CE))
+          EnumerateType(GEP->getSourceElementType());
+      }
 
       // Finally, add the value.  Doing this could make the ValueID reference be
       // dangling, don't reuse it.
@@ -1039,7 +1042,7 @@ void ValueEnumerator::EnumerateAttributes(AttributeList PAL) {
   }
 
   // Do lookups for all attribute groups.
-  for (unsigned i = PAL.index_begin(), e = PAL.index_end(); i != e; ++i) {
+  for (unsigned i : PAL.indexes()) {
     AttributeSet AS = PAL.getAttributes(i);
     if (!AS.hasAttributes())
       continue;
@@ -1148,8 +1151,8 @@ void ValueEnumerator::purgeFunction() {
     ValueMap.erase(Values[i].first);
   for (unsigned i = NumModuleMDs, e = MDs.size(); i != e; ++i)
     MetadataMap.erase(MDs[i]);
-  for (unsigned i = 0, e = BasicBlocks.size(); i != e; ++i)
-    ValueMap.erase(BasicBlocks[i]);
+  for (const BasicBlock *BB : BasicBlocks)
+    ValueMap.erase(BB);
 
   Values.resize(NumModuleValues);
   MDs.resize(NumModuleMDs);

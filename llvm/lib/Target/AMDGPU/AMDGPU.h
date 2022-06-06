@@ -11,6 +11,7 @@
 #define LLVM_LIB_TARGET_AMDGPU_AMDGPU_H
 
 #include "llvm/IR/PassManager.h"
+#include "llvm/Pass.h"
 #include "llvm/Support/CodeGen.h"
 
 namespace llvm {
@@ -90,10 +91,6 @@ ModulePass *createAMDGPULowerIntrinsicsPass();
 void initializeAMDGPULowerIntrinsicsPass(PassRegistry &);
 extern char &AMDGPULowerIntrinsicsID;
 
-ModulePass *createAMDGPUFixFunctionBitcastsPass();
-void initializeAMDGPUFixFunctionBitcastsPass(PassRegistry &);
-extern char &AMDGPUFixFunctionBitcastsID;
-
 ModulePass *createAMDGPUCtorDtorLoweringPass();
 void initializeAMDGPUCtorDtorLoweringPass(PassRegistry &);
 extern char &AMDGPUCtorDtorLoweringID;
@@ -101,6 +98,15 @@ extern char &AMDGPUCtorDtorLoweringID;
 FunctionPass *createAMDGPULowerKernelArgumentsPass();
 void initializeAMDGPULowerKernelArgumentsPass(PassRegistry &);
 extern char &AMDGPULowerKernelArgumentsID;
+
+FunctionPass *createAMDGPUPromoteKernelArgumentsPass();
+void initializeAMDGPUPromoteKernelArgumentsPass(PassRegistry &);
+extern char &AMDGPUPromoteKernelArgumentsID;
+
+struct AMDGPUPromoteKernelArgumentsPass
+    : PassInfoMixin<AMDGPUPromoteKernelArgumentsPass> {
+  PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
+};
 
 ModulePass *createAMDGPULowerKernelAttributesPass();
 void initializeAMDGPULowerKernelAttributesPass(PassRegistry &);
@@ -324,6 +330,9 @@ extern char &GCNNSAReassignID;
 
 void initializeGCNPreRAOptimizationsPass(PassRegistry &);
 extern char &GCNPreRAOptimizationsID;
+
+FunctionPass *createAMDGPUSetWavePriorityPass();
+void initializeAMDGPUSetWavePriorityPass(PassRegistry &);
 
 namespace AMDGPU {
 enum TargetIndex {

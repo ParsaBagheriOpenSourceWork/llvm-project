@@ -26,7 +26,7 @@ def err_fe_linking_module : Error<"cannot link module '%0': %1">, DefaultFatal;
 def warn_fe_linking_module : Warning<"linking module '%0': %1">, InGroup<LinkerWarnings>;
 def note_fe_linking_module : Note<"linking module '%0': %1">;
 
-def warn_fe_frame_larger_than : Warning<"stack frame size (%0) exceeds limit (%1) in %q2">,
+def warn_fe_frame_larger_than : Warning<"stack frame size (%0) exceeds limit (%1) in '%2'">,
     BackendInfo, InGroup<BackendFrameLargerThan>;
 def warn_fe_backend_frame_larger_than: Warning<"%0">,
     BackendInfo, InGroup<BackendFrameLargerThan>;
@@ -47,6 +47,10 @@ def warn_fe_backend_unsupported_fp_rounding : Warning<
 def warn_fe_backend_unsupported_fp_exceptions : Warning<
     "overriding currently unsupported use of floating point exceptions "
     "on this target">, InGroup<UnsupportedFPOpt>;
+
+def err_incompatible_fp_eval_method_options : Error<
+    "option 'ffp-eval-method' cannot be used with option "
+    "%select{'fapprox-func'|'mreassociate'|'freciprocal'}0">;
 
 def remark_fe_backend_optimization_remark : Remark<"%0">, BackendInfo,
     InGroup<BackendOptimizationRemark>;
@@ -311,6 +315,11 @@ def warn_profile_data_missing : Warning<
 def warn_profile_data_unprofiled : Warning<
   "no profile data available for file \"%0\"">,
   InGroup<ProfileInstrUnprofiled>;
+def warn_profile_data_misexpect : Warning<
+  "Potential performance regression from use of __builtin_expect(): "
+  "Annotation was correct on %0 of profiled executions.">,
+  BackendInfo,
+  InGroup<MisExpect>;
 } // end of instrumentation issue category
 
 }

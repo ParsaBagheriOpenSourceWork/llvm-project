@@ -18,19 +18,17 @@
 #include "llvm/ADT/Triple.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/PassManager.h"
-#include "llvm/Pass.h"
 #include "llvm/Support/CodeGen.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/PGOOptions.h"
 #include "llvm/Target/CGPassBuilderOption.h"
 #include "llvm/Target/TargetOptions.h"
 #include <string>
+#include <utility>
 
 namespace llvm {
 
 class AAManager;
-template <typename IRUnitT, typename AnalysisManagerT, typename... ExtraArgTs>
-class PassManager;
 using ModulePassManager = PassManager<Module>;
 
 class Function;
@@ -259,6 +257,8 @@ public:
     Options.SupportsDebugEntryValues = Enable;
   }
 
+  void setCFIFixup(bool Enable) { Options.EnableCFIFixup = Enable; }
+
   bool getAIXExtendedAltivecABI() const {
     return Options.EnableAIXExtendedAltivecABI;
   }
@@ -319,18 +319,30 @@ public:
   /// properties.
   virtual unsigned getAssumedAddrSpace(const Value *V) const { return -1; }
 
+  /// If the specified predicate checks whether a generic pointer falls within
+  /// a specified address space, return that generic pointer and the address
+  /// space being queried.
+  ///
+  /// Such predicates could be specified in @llvm.assume intrinsics for the
+  /// optimizer to assume that the given generic pointer always falls within
+  /// the address space based on that predicate.
+  virtual std::pair<const Value *, unsigned>
+  getPredicatedAddrSpace(const Value *V) const {
+    return std::make_pair(nullptr, -1);
+  }
+
   /// Get a \c TargetIRAnalysis appropriate for the target.
   ///
   /// This is used to construct the new pass manager's target IR analysis pass,
   /// set up appropriately for this target machine. Even the old pass manager
   /// uses this to answer queries about the IR.
-  TargetIRAnalysis getTargetIRAnalysis();
+  TargetIRAnalysis getTargetIRAnalysis() const;
 
   /// Return a TargetTransformInfo for a given function.
   ///
   /// The returned TargetTransformInfo is specialized to the subtarget
   /// corresponding to \p F.
-  virtual TargetTransformInfo getTargetTransformInfo(const Function &F);
+  virtual TargetTransformInfo getTargetTransformInfo(const Function &F) const;
 
   /// Allow the target to modify the pass manager, e.g. by calling
   /// PassManagerBuilder::addExtension.
@@ -404,7 +416,7 @@ public:
   ///
   /// The TTI returned uses the common code generator to answer queries about
   /// the IR.
-  TargetTransformInfo getTargetTransformInfo(const Function &F) override;
+  TargetTransformInfo getTargetTransformInfo(const Function &F) const override;
 
   /// Create a pass configuration object to be used by addPassToEmitX methods
   /// for generating a pipeline of CodeGen passes.
@@ -472,6 +484,10 @@ public:
   virtual bool useIPRA() const {
     return false;
   }
+
+  /// The default variant to use in unqualified `asm` instructions.
+  /// If this returns 0, `asm "$(foo$|bar$)"` will evaluate to `asm "foo"`.
+  virtual int unqualifiedInlineAsmVariant() const { return 0; }
 };
 
 /// Helper method for getting the code model, returning Default if

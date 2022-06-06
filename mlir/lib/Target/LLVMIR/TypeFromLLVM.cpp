@@ -95,8 +95,12 @@ private:
 
   /// Translates the given pointer type.
   Type translate(llvm::PointerType *type) {
-    return LLVM::LLVMPointerType::get(translateType(type->getElementType()),
-                                      type->getAddressSpace());
+    if (type->isOpaque())
+      return LLVM::LLVMPointerType::get(&context, type->getAddressSpace());
+
+    return LLVM::LLVMPointerType::get(
+        translateType(type->getNonOpaquePointerElementType()),
+        type->getAddressSpace());
   }
 
   /// Translates the given structure type.
@@ -150,14 +154,14 @@ private:
   MLIRContext &context;
 };
 
-} // end namespace detail
-} // end namespace LLVM
-} // end namespace mlir
+} // namespace detail
+} // namespace LLVM
+} // namespace mlir
 
 LLVM::TypeFromLLVMIRTranslator::TypeFromLLVMIRTranslator(MLIRContext &context)
     : impl(new detail::TypeFromLLVMIRTranslatorImpl(context)) {}
 
-LLVM::TypeFromLLVMIRTranslator::~TypeFromLLVMIRTranslator() {}
+LLVM::TypeFromLLVMIRTranslator::~TypeFromLLVMIRTranslator() = default;
 
 Type LLVM::TypeFromLLVMIRTranslator::translateType(llvm::Type *type) {
   return impl->translateType(type);

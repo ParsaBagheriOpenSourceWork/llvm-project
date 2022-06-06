@@ -8,7 +8,6 @@
 
 #include "lldb/Host/Config.h"
 #include "lldb/Utility/Log.h"
-#include "lldb/Utility/Logging.h"
 #include "lldb/lldb-enumerations.h"
 
 #if LLDB_ENABLE_PYTHON
@@ -36,6 +35,22 @@ ScriptedPythonInterface::GetStatusFromMethod(llvm::StringRef method_name) {
 }
 
 template <>
+StructuredData::ArraySP
+ScriptedPythonInterface::ExtractValueFromPythonObject<StructuredData::ArraySP>(
+    python::PythonObject &p, Status &error) {
+  python::PythonList result_list(python::PyRefType::Borrowed, p.get());
+  return result_list.CreateStructuredArray();
+}
+
+template <>
+StructuredData::DictionarySP
+ScriptedPythonInterface::ExtractValueFromPythonObject<
+    StructuredData::DictionarySP>(python::PythonObject &p, Status &error) {
+  python::PythonDictionary result_dict(python::PyRefType::Borrowed, p.get());
+  return result_dict.CreateStructuredDictionary();
+}
+
+template <>
 Status ScriptedPythonInterface::ExtractValueFromPythonObject<Status>(
     python::PythonObject &p, Status &error) {
   if (lldb::SBError *sb_error = reinterpret_cast<lldb::SBError *>(
@@ -55,11 +70,30 @@ ScriptedPythonInterface::ExtractValueFromPythonObject<lldb::DataExtractorSP>(
       LLDBSWIGPython_CastPyObjectToSBData(p.get()));
 
   if (!sb_data) {
-    error.SetErrorString("Couldn't cast lldb::SBError to lldb::Status.");
+    error.SetErrorString(
+        "Couldn't cast lldb::SBData to lldb::DataExtractorSP.");
     return nullptr;
   }
 
   return m_interpreter.GetDataExtractorFromSBData(*sb_data);
+}
+
+template <>
+llvm::Optional<MemoryRegionInfo>
+ScriptedPythonInterface::ExtractValueFromPythonObject<
+    llvm::Optional<MemoryRegionInfo>>(python::PythonObject &p, Status &error) {
+
+  lldb::SBMemoryRegionInfo *sb_mem_reg_info =
+      reinterpret_cast<lldb::SBMemoryRegionInfo *>(
+          LLDBSWIGPython_CastPyObjectToSBMemoryRegionInfo(p.get()));
+
+  if (!sb_mem_reg_info) {
+    error.SetErrorString(
+        "Couldn't cast lldb::SBMemoryRegionInfo to lldb::MemoryRegionInfoSP.");
+    return {};
+  }
+
+  return m_interpreter.GetOpaqueTypeFromSBMemoryRegionInfo(*sb_mem_reg_info);
 }
 
 #endif

@@ -269,7 +269,9 @@ def err_bad_character_encoding : Error<
 def warn_bad_character_encoding : ExtWarn<
   "illegal character encoding in character literal">,
   InGroup<InvalidSourceEncoding>;
-def err_lexing_string : Error<"failure when lexing a string">;
+def err_lexing_string : Error<"failure when lexing a string literal">;
+def err_lexing_char : Error<"failure when lexing a character literal">;
+def err_lexing_numeric : Error<"failure when lexing a numeric literal">;
 def err_placeholder_in_source : Error<"editor placeholder in source file">;
 
 //===----------------------------------------------------------------------===//
@@ -313,11 +315,9 @@ def pp_pragma_sysheader_in_main_file : Warning<
   "#pragma system_header ignored in main file">,
   InGroup<DiagGroup<"pragma-system-header-outside-header">>;
 
-def err_pragma_include_instead_not_sysheader : Error<
-  "'#pragma clang include_instead' cannot be used outside of system headers">;
-def err_pragma_include_instead_system_reserved : Error<
-  "header '%0' is an implementation detail; #include %select{'%2'|either '%2' "
-  "or '%3'|one of %2}1 instead">;
+def err_illegal_use_of_flt_eval_macro : Error<
+  "'__FLT_EVAL_METHOD__' cannot be expanded inside a scope containing "
+  "'#pragma clang fp eval_method'">;
 
 def pp_poisoning_existing_macro : Warning<"poisoning existing macro">;
 def pp_out_of_date_dependency : Warning<
@@ -412,6 +412,10 @@ def ext_embedded_directive : Extension<
 def ext_missing_varargs_arg : Extension<
   "must specify at least one argument for '...' parameter of variadic macro">,
   InGroup<GNUZeroVariadicMacroArguments>;
+def warn_cxx17_compat_missing_varargs_arg : Warning<
+  "passing no argument for the '...' parameter of a variadic macro is "
+  "incompatible with C++ standards before C++20">,
+  InGroup<CXXPre20Compat>, DefaultIgnore;
 def ext_empty_fnmacro_arg : Extension<
   "empty macro arguments are a C99 feature">, InGroup<C99>;
 def warn_cxx98_compat_empty_fnmacro_arg : Warning<
@@ -423,7 +427,13 @@ def note_macro_expansion_here : Note<"expansion of macro %0 requested here">;
 def ext_pp_opencl_variadic_macros : Extension<
   "variadic macros are a Clang extension in OpenCL">;
 
-def err_pp_invalid_directive : Error<"invalid preprocessing directive">;
+def ext_pp_gnu_line_directive : Extension<
+  "this style of line directive is a GNU extension">,
+  InGroup<GNULineMarker>;
+def err_pp_invalid_directive : Error<
+  "invalid preprocessing directive%select{|, did you mean '#%1'?}0">;
+def warn_pp_invalid_directive : Warning<
+  err_pp_invalid_directive.Text>, InGroup<DiagGroup<"unknown-directives">>;
 def err_pp_directive_required : Error<
   "%0 must be used within a preprocessing directive">;
 def err_pp_file_not_found : Error<"'%0' file not found">, DefaultFatal;
@@ -442,6 +452,9 @@ def warn_pp_hdrstop_filename_ignored : Warning<
   "#pragma hdrstop filename not supported, "
   "/Fp can be used to specify precompiled header filename">,
   InGroup<ClangClPch>;
+def remark_pp_search_path_usage : Remark<
+  "search path used: '%0'">,
+  InGroup<UsedSearchPath>;
 def err_pp_file_not_found_angled_include_not_fatal : Error<
   "'%0' file not found with <angled> %select{include|import}1; "
   "use \"quotes\" instead">;
@@ -551,7 +564,13 @@ def warn_pragma_restrict_expansion_macro_use :
 
 // - Note for macro annotations.
 def note_pp_macro_annotation :
-  Note<"macro marked '%select{deprecated|restrict_expansion}0' here">;
+  Note<"macro marked '%select{deprecated|restrict_expansion|final}0' here">;
+
+// - #pragma clang final(...)
+def warn_pragma_final_macro :
+  ExtWarn<"macro %0 has been marked as final and should not be "
+          "%select{undefined|redefined}1">,
+  InGroup<FinalMacro>,  ShowInSystemHeader;
 
 // - #pragma execution_character_set(...)
 def warn_pragma_exec_charset_expected :
@@ -680,6 +699,23 @@ def ext_pp_line_too_big : Extension<
 def warn_cxx98_compat_pp_line_too_big : Warning<
   "#line number greater than 32767 is incompatible with C++98">,
   InGroup<CXX98CompatPedantic>, DefaultIgnore;
+
+def warn_c2x_compat_pp_directive : Warning<
+  "use of a '#%select{<BUG IF SEEN>|elifdef|elifndef}0' directive "
+  "is incompatible with C standards before C2x">,
+  InGroup<CPre2xCompat>, DefaultIgnore;
+def ext_c2x_pp_directive : ExtWarn<
+  "use of a '#%select{<BUG IF SEEN>|elifdef|elifndef}0' directive "
+  "is a C2x extension">,
+  InGroup<C2x>;
+def warn_cxx2b_compat_pp_directive : Warning<
+  "use of a '#%select{<BUG IF SEEN>|elifdef|elifndef}0' directive "
+  "is incompatible with C++ standards before C++2b">,
+  InGroup<CXXPre2bCompat>, DefaultIgnore;
+def ext_cxx2b_pp_directive : ExtWarn<
+  "use of a '#%select{<BUG IF SEEN>|elifdef|elifndef}0' directive "
+  "is a C++2b extension">,
+  InGroup<CXX2b>;
 
 def err_pp_visibility_non_macro : Error<"no macro named %0">;
 
