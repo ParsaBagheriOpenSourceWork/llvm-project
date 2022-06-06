@@ -141,6 +141,22 @@ def LinalgTiling : Pass<"linalg-tile", "func::FuncOp"> {
   ];
 }
 
+def LinalgMemoryFootprintReduction :
+    Pass<"linalg-memory-footprint-reduce", "func::FuncOp"> {
+  let summary = "Brings the LinalgOps memory footprint below maxMemFootprint";
+  let constructor = "mlir::createLinalgMemoryFootprintReductionPass()";
+  let options = [
+    Option<"maxMemFootprint", "linalg-max-memory-footprint", "int64_t", 
+            /*default=*/"0", "Maximum memory footprint in bytes">
+  ];
+  let dependentDialects = [
+    "AffineDialect",
+    "linalg::LinalgDialect",
+    "memref::MemRefDialect",
+    "scf::SCFDialect"
+  ];
+}
+
 def LinalgGeneralization : Pass<"linalg-generalize-named-ops", "func::FuncOp"> {
   let summary = "Convert named ops into generic ops";
   let constructor = "mlir::createLinalgGeneralizationPass()";

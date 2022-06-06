@@ -682,6 +682,33 @@ def ConvertParallelLoopToGpu : Pass<"convert-parallel-loops-to-gpu"> {
 }
 
 //===----------------------------------------------------------------------===//
+// SCFToLuminous
+//===----------------------------------------------------------------------===//
+
+def ConvertParallelLoopToLuminousLaunch :
+    Pass<"convert-parallel-to-luminous-launch", "ModuleOp"> {
+  let summary = "Convert top-level scf.parallel ops with luminous launch "
+                "attribute to luminous.launch capsules";
+  let constructor = "mlir::createConvertParallelForToLuminousLaunchPass()";
+  let dependentDialects = ["luminous::LuminousDialect",
+                           "async::AsyncDialect"];
+}
+
+//===----------------------------------------------------------------------===//
+// LinalgToLuminous
+//===----------------------------------------------------------------------===//
+
+def ConvertLinalgToLuminousLaunch :
+    Pass<"convert-linalg-to-luminous-launch", "ModuleOp"> {
+  let summary = "Convert linalg ops with luminous launch attributes to "
+                "luminous.launch capsules";
+  let constructor = "mlir::createConvertLinalgToLuminousLaunchPass()";
+  let dependentDialects = ["luminous::LuminousDialect",
+                           "async::AsyncDialect",
+                           "linalg::LinalgDialect"];
+}
+
+//===----------------------------------------------------------------------===//
 // ShapeToStandard
 //===----------------------------------------------------------------------===//
 
@@ -851,12 +878,12 @@ def ConvertVectorToGPU : Pass<"convert-vector-to-gpu"> {
                 "dialect";
   let constructor = "mlir::createConvertVectorToGPUPass()";
   let dependentDialects = [
-    "memref::MemRefDialect", "gpu::GPUDialect", "AffineDialect", 
+    "memref::MemRefDialect", "gpu::GPUDialect", "AffineDialect",
     "vector::VectorDialect", "nvgpu::NVGPUDialect"
   ];
 
   let options = [
-    Option<"useNvGpu", "use-nvgpu", "bool", /*default=*/"false", 
+    Option<"useNvGpu", "use-nvgpu", "bool", /*default=*/"false",
       "convert to NvGPU ops instead of GPU dialect ops">
   ];
 }

@@ -107,6 +107,14 @@ namespace arm_neon {
 class ArmNeonDialect;
 } // namespace arm_neon
 
+namespace luminous {
+class LuminousDialect;
+} // end namespace luminous
+
+namespace async {
+class AsyncDialect;
+} // end namespace async
+
 #define GEN_PASS_CLASSES
 #include "mlir/Conversion/Passes.h.inc"
 
