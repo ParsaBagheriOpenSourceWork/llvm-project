@@ -30,13 +30,16 @@ class MemoryBuffer;
 class ModulePass;
 class Pass;
 class TargetMachine;
-class TargetRegisterClass;
 class raw_ostream;
 
 } // End llvm namespace
 
 // List of target independent CodeGen pass IDs.
 namespace llvm {
+
+  /// AtomicExpandPass - At IR level this pass replace atomic instructions with
+  /// __atomic_* library calls, or target specific instruction which implement the
+  /// same semantics in a way which better fits the target backend.
   FunctionPass *createAtomicExpandPass();
 
   /// createUnreachableBlockEliminationPass - The LLVM code generator does not
@@ -491,6 +494,9 @@ namespace llvm {
   // This pass expands indirectbr instructions.
   FunctionPass *createIndirectBrExpandPass();
 
+  /// Creates CFI Fixup pass. \see CFIFixup.cpp
+  FunctionPass *createCFIFixup();
+
   /// Creates CFI Instruction Inserter pass. \see CFIInstrInserter.cpp
   FunctionPass *createCFIInstrInserter();
 
@@ -547,6 +553,16 @@ namespace llvm {
   /// The pass transforms amx intrinsics to scalar operation if the function has
   /// optnone attribute or it is O0.
   FunctionPass *createX86LowerAMXIntrinsicsPass();
+
+  /// When learning an eviction policy, extract score(reward) information,
+  /// otherwise this does nothing
+  FunctionPass *createRegAllocScoringPass();
+
+  /// JMC instrument pass.
+  ModulePass *createJMCInstrumenterPass();
+
+  /// This pass converts conditional moves to conditional jumps when profitable.
+  FunctionPass *createSelectOptimizePass();
 } // End llvm namespace
 
 #endif

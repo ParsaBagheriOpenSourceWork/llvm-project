@@ -25,6 +25,7 @@
 #include "lldb/Target/Thread.h"
 #include "lldb/Utility/ConstString.h"
 #include "lldb/Utility/DataExtractor.h"
+#include "lldb/Utility/LLDBLog.h"
 #include "lldb/Utility/Log.h"
 #include "lldb/Utility/RegisterValue.h"
 #include "lldb/Utility/Status.h"
@@ -92,8 +93,7 @@ static const RegisterInfo g_register_infos_mips64[] = {
       LLDB_INVALID_REGNUM},
      nullptr,
      nullptr,
-     nullptr,
-     0},
+    },
     {"r1",
      "AT",
      8,
@@ -104,8 +104,7 @@ static const RegisterInfo g_register_infos_mips64[] = {
       LLDB_INVALID_REGNUM},
      nullptr,
      nullptr,
-     nullptr,
-     0},
+    },
     {"r2",
      "v0",
      8,
@@ -116,8 +115,7 @@ static const RegisterInfo g_register_infos_mips64[] = {
       LLDB_INVALID_REGNUM},
      nullptr,
      nullptr,
-     nullptr,
-     0},
+    },
     {"r3",
      "v1",
      8,
@@ -128,8 +126,7 @@ static const RegisterInfo g_register_infos_mips64[] = {
       LLDB_INVALID_REGNUM},
      nullptr,
      nullptr,
-     nullptr,
-     0},
+    },
     {"r4",
      nullptr,
      8,
@@ -140,8 +137,7 @@ static const RegisterInfo g_register_infos_mips64[] = {
       LLDB_INVALID_REGNUM},
      nullptr,
      nullptr,
-     nullptr,
-     0},
+    },
     {"r5",
      nullptr,
      8,
@@ -152,8 +148,7 @@ static const RegisterInfo g_register_infos_mips64[] = {
       LLDB_INVALID_REGNUM},
      nullptr,
      nullptr,
-     nullptr,
-     0},
+    },
     {"r6",
      nullptr,
      8,
@@ -164,8 +159,7 @@ static const RegisterInfo g_register_infos_mips64[] = {
       LLDB_INVALID_REGNUM},
      nullptr,
      nullptr,
-     nullptr,
-     0},
+    },
     {"r7",
      nullptr,
      8,
@@ -176,8 +170,7 @@ static const RegisterInfo g_register_infos_mips64[] = {
       LLDB_INVALID_REGNUM},
      nullptr,
      nullptr,
-     nullptr,
-     0},
+    },
     {"r8",
      nullptr,
      8,
@@ -188,8 +181,7 @@ static const RegisterInfo g_register_infos_mips64[] = {
       LLDB_INVALID_REGNUM},
      nullptr,
      nullptr,
-     nullptr,
-     0},
+    },
     {"r9",
      nullptr,
      8,
@@ -200,8 +192,7 @@ static const RegisterInfo g_register_infos_mips64[] = {
       LLDB_INVALID_REGNUM},
      nullptr,
      nullptr,
-     nullptr,
-     0},
+    },
     {"r10",
      nullptr,
      8,
@@ -212,8 +203,7 @@ static const RegisterInfo g_register_infos_mips64[] = {
       LLDB_INVALID_REGNUM},
      nullptr,
      nullptr,
-     nullptr,
-     0},
+    },
     {"r11",
      nullptr,
      8,
@@ -224,8 +214,7 @@ static const RegisterInfo g_register_infos_mips64[] = {
       LLDB_INVALID_REGNUM},
      nullptr,
      nullptr,
-     nullptr,
-     0},
+    },
     {"r12",
      nullptr,
      8,
@@ -236,8 +225,7 @@ static const RegisterInfo g_register_infos_mips64[] = {
       LLDB_INVALID_REGNUM},
      nullptr,
      nullptr,
-     nullptr,
-     0},
+    },
     {"r13",
      nullptr,
      8,
@@ -248,8 +236,7 @@ static const RegisterInfo g_register_infos_mips64[] = {
       LLDB_INVALID_REGNUM},
      nullptr,
      nullptr,
-     nullptr,
-     0},
+    },
     {"r14",
      nullptr,
      8,
@@ -260,8 +247,7 @@ static const RegisterInfo g_register_infos_mips64[] = {
       LLDB_INVALID_REGNUM},
      nullptr,
      nullptr,
-     nullptr,
-     0},
+    },
     {"r15",
      nullptr,
      8,
@@ -272,8 +258,7 @@ static const RegisterInfo g_register_infos_mips64[] = {
       LLDB_INVALID_REGNUM},
      nullptr,
      nullptr,
-     nullptr,
-     0},
+    },
     {"r16",
      nullptr,
      8,
@@ -284,8 +269,7 @@ static const RegisterInfo g_register_infos_mips64[] = {
       LLDB_INVALID_REGNUM},
      nullptr,
      nullptr,
-     nullptr,
-     0},
+    },
     {"r17",
      nullptr,
      8,
@@ -296,8 +280,7 @@ static const RegisterInfo g_register_infos_mips64[] = {
       LLDB_INVALID_REGNUM},
      nullptr,
      nullptr,
-     nullptr,
-     0},
+    },
     {"r18",
      nullptr,
      8,
@@ -308,8 +291,7 @@ static const RegisterInfo g_register_infos_mips64[] = {
       LLDB_INVALID_REGNUM},
      nullptr,
      nullptr,
-     nullptr,
-     0},
+    },
     {"r19",
      nullptr,
      8,
@@ -320,8 +302,7 @@ static const RegisterInfo g_register_infos_mips64[] = {
       LLDB_INVALID_REGNUM},
      nullptr,
      nullptr,
-     nullptr,
-     0},
+    },
     {"r20",
      nullptr,
      8,
@@ -332,8 +313,7 @@ static const RegisterInfo g_register_infos_mips64[] = {
       LLDB_INVALID_REGNUM},
      nullptr,
      nullptr,
-     nullptr,
-     0},
+    },
     {"r21",
      nullptr,
      8,
@@ -344,8 +324,7 @@ static const RegisterInfo g_register_infos_mips64[] = {
       LLDB_INVALID_REGNUM},
      nullptr,
      nullptr,
-     nullptr,
-     0},
+    },
     {"r22",
      nullptr,
      8,
@@ -356,8 +335,7 @@ static const RegisterInfo g_register_infos_mips64[] = {
       LLDB_INVALID_REGNUM},
      nullptr,
      nullptr,
-     nullptr,
-     0},
+    },
     {"r23",
      nullptr,
      8,
@@ -368,8 +346,7 @@ static const RegisterInfo g_register_infos_mips64[] = {
       LLDB_INVALID_REGNUM},
      nullptr,
      nullptr,
-     nullptr,
-     0},
+    },
     {"r24",
      nullptr,
      8,
@@ -380,8 +357,7 @@ static const RegisterInfo g_register_infos_mips64[] = {
       LLDB_INVALID_REGNUM},
      nullptr,
      nullptr,
-     nullptr,
-     0},
+    },
     {"r25",
      nullptr,
      8,
@@ -392,8 +368,7 @@ static const RegisterInfo g_register_infos_mips64[] = {
       LLDB_INVALID_REGNUM},
      nullptr,
      nullptr,
-     nullptr,
-     0},
+    },
     {"r26",
      nullptr,
      8,
@@ -404,8 +379,7 @@ static const RegisterInfo g_register_infos_mips64[] = {
       LLDB_INVALID_REGNUM},
      nullptr,
      nullptr,
-     nullptr,
-     0},
+    },
     {"r27",
      nullptr,
      8,
@@ -416,8 +390,7 @@ static const RegisterInfo g_register_infos_mips64[] = {
       LLDB_INVALID_REGNUM},
      nullptr,
      nullptr,
-     nullptr,
-     0},
+    },
     {"r28",
      "gp",
      8,
@@ -428,8 +401,7 @@ static const RegisterInfo g_register_infos_mips64[] = {
       LLDB_INVALID_REGNUM},
      nullptr,
      nullptr,
-     nullptr,
-     0},
+    },
     {"r29",
      nullptr,
      8,
@@ -440,8 +412,7 @@ static const RegisterInfo g_register_infos_mips64[] = {
       LLDB_INVALID_REGNUM},
      nullptr,
      nullptr,
-     nullptr,
-     0},
+    },
     {"r30",
      nullptr,
      8,
@@ -452,8 +423,7 @@ static const RegisterInfo g_register_infos_mips64[] = {
       LLDB_INVALID_REGNUM},
      nullptr,
      nullptr,
-     nullptr,
-     0},
+    },
     {"r31",
      nullptr,
      8,
@@ -464,8 +434,7 @@ static const RegisterInfo g_register_infos_mips64[] = {
       LLDB_INVALID_REGNUM},
      nullptr,
      nullptr,
-     nullptr,
-     0},
+    },
     {"sr",
      nullptr,
      4,
@@ -476,8 +445,7 @@ static const RegisterInfo g_register_infos_mips64[] = {
       LLDB_INVALID_REGNUM},
      nullptr,
      nullptr,
-     nullptr,
-     0},
+    },
     {"lo",
      nullptr,
      8,
@@ -488,8 +456,7 @@ static const RegisterInfo g_register_infos_mips64[] = {
       LLDB_INVALID_REGNUM},
      nullptr,
      nullptr,
-     nullptr,
-     0},
+    },
     {"hi",
      nullptr,
      8,
@@ -500,8 +467,7 @@ static const RegisterInfo g_register_infos_mips64[] = {
       LLDB_INVALID_REGNUM},
      nullptr,
      nullptr,
-     nullptr,
-     0},
+    },
     {"bad",
      nullptr,
      8,
@@ -512,8 +478,7 @@ static const RegisterInfo g_register_infos_mips64[] = {
       LLDB_INVALID_REGNUM},
      nullptr,
      nullptr,
-     nullptr,
-     0},
+    },
     {"cause",
      nullptr,
      8,
@@ -524,8 +489,7 @@ static const RegisterInfo g_register_infos_mips64[] = {
       LLDB_INVALID_REGNUM},
      nullptr,
      nullptr,
-     nullptr,
-     0},
+    },
     {"pc",
      nullptr,
      8,
@@ -536,8 +500,7 @@ static const RegisterInfo g_register_infos_mips64[] = {
       LLDB_INVALID_REGNUM},
      nullptr,
      nullptr,
-     nullptr,
-     0},
+    },
 };
 
 static const uint32_t k_num_register_infos =
@@ -564,7 +527,7 @@ ABISysV_mips64::CreateInstance(lldb::ProcessSP process_sp, const ArchSpec &arch)
 bool ABISysV_mips64::PrepareTrivialCall(Thread &thread, addr_t sp,
                                         addr_t func_addr, addr_t return_addr,
                                         llvm::ArrayRef<addr_t> args) const {
-  Log *log(lldb_private::GetLogIfAllCategoriesSet(LIBLLDB_LOG_EXPRESSIONS));
+  Log *log = GetLog(LLDBLog::Expressions);
 
   if (log) {
     StreamString s;
@@ -864,7 +827,7 @@ ValueObjectSP ABISysV_mips64::GetReturnValueObjectImpl(
             DataExtractor f2_data;
             reg_ctx->ReadRegister(f2_info, f2_value);
             DataExtractor *copy_from_extractor = nullptr;
-            DataBufferSP data_sp(new DataBufferHeap(16, 0));
+            WritableDataBufferSP data_sp(new DataBufferHeap(16, 0));
             DataExtractor return_ext(
                 data_sp, target_byte_order,
                 target->GetArchitecture().GetAddressByteSize());
@@ -904,7 +867,7 @@ ValueObjectSP ABISysV_mips64::GetReturnValueObjectImpl(
              type_flags & eTypeIsVector) {
     // Any structure of up to 16 bytes in size is returned in the registers.
     if (*byte_size <= 16) {
-      DataBufferSP data_sp(new DataBufferHeap(16, 0));
+      WritableDataBufferSP data_sp(new DataBufferHeap(16, 0));
       DataExtractor return_ext(data_sp, target_byte_order,
                                target->GetArchitecture().GetAddressByteSize());
 
@@ -1199,15 +1162,4 @@ void ABISysV_mips64::Initialize() {
 
 void ABISysV_mips64::Terminate() {
   PluginManager::UnregisterPlugin(CreateInstance);
-}
-
-lldb_private::ConstString ABISysV_mips64::GetPluginNameStatic() {
-  static ConstString g_name("sysv-mips64");
-  return g_name;
-}
-
-// PluginInterface protocol
-
-lldb_private::ConstString ABISysV_mips64::GetPluginName() {
-  return GetPluginNameStatic();
 }

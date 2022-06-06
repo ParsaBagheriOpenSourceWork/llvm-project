@@ -21,6 +21,8 @@
 #include <cstring>
 #include <limits>
 
+#include "test_macros.h"
+
 // std::bit_cast does not preserve padding bits, so if T has padding bits,
 // the results might not memcmp cleanly.
 template<bool HasUniqueObjectRepresentations = true, typename T>
@@ -227,16 +229,11 @@ bool tests() {
         test_roundtrip_through_nested_T<false>(i);
         test_roundtrip_through_buffer<false>(i);
 
-        // On arm64 on Apple platforms, long double is just double, so we don't
-        // test against int128, but instead against double itself. Otherwise,
-        // we test against int128 if we have those types available.
-#if defined(__aarch64__) && defined(__APPLE__)
-#   define LONG_DOUBLE_IS_DOUBLE
-#endif
-
-#if defined(LONG_DOUBLE_IS_DOUBLE)
+#if __SIZEOF_LONG_DOUBLE__ == __SIZEOF_DOUBLE__
         test_roundtrip_through<double, false>(i);
-#elif !defined(_LIBCPP_HAS_NO_INT128)
+#endif
+#if defined(__SIZEOF_INT128__) && __SIZEOF_LONG_DOUBLE__ == __SIZEOF_INT128__ &&                                       \
+    !TEST_HAS_FEATURE(memory_sanitizer) // Some bits are just padding.
         test_roundtrip_through<__int128_t, false>(i);
         test_roundtrip_through<__uint128_t, false>(i);
 #endif

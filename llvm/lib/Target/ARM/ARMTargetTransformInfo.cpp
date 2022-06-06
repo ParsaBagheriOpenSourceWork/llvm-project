@@ -149,7 +149,7 @@ ARMTTIImpl::instCombineIntrinsic(InstCombiner &IC, IntrinsicInst &II) const {
     Align MemAlign =
         getKnownAlignment(II.getArgOperand(0), IC.getDataLayout(), &II,
                           &IC.getAssumptionCache(), &IC.getDominatorTree());
-    unsigned AlignArg = II.getNumArgOperands() - 1;
+    unsigned AlignArg = II.arg_size() - 1;
     Value *AlignArgOp = II.getArgOperand(AlignArg);
     MaybeAlign Align = cast<ConstantInt>(AlignArgOp)->getMaybeAlignValue();
     if (Align && *Align < MemAlign) {
@@ -175,7 +175,7 @@ ARMTTIImpl::instCombineIntrinsic(InstCombiner &IC, IntrinsicInst &II) const {
                          PatternMatch::m_Constant(XorMask))) &&
         II.getType() == ArgArg->getType()) {
       if (auto *CI = dyn_cast<ConstantInt>(XorMask)) {
-        if (CI->getValue().trunc(16).isAllOnesValue()) {
+        if (CI->getValue().trunc(16).isAllOnes()) {
           auto TrueVector = IC.Builder.CreateVectorSplat(
               cast<FixedVectorType>(II.getType())->getNumElements(),
               IC.Builder.getTrue());
@@ -334,15 +334,16 @@ InstructionCost ARMTTIImpl::getIntImmCodeSizeCost(unsigned Opcode, unsigned Idx,
 }
 
 // Checks whether Inst is part of a min(max()) or max(min()) pattern
-// that will match to an SSAT instruction
-static bool isSSATMinMaxPattern(Instruction *Inst, const APInt &Imm) {
+// that will match to an SSAT instruction. Returns the instruction being
+// saturated, or null if no saturation pattern was found.
+static Value *isSSATMinMaxPattern(Instruction *Inst, const APInt &Imm) {
   Value *LHS, *RHS;
   ConstantInt *C;
   SelectPatternFlavor InstSPF = matchSelectPattern(Inst, LHS, RHS).Flavor;
 
   if (InstSPF == SPF_SMAX &&
       PatternMatch::match(RHS, PatternMatch::m_ConstantInt(C)) &&
-      C->getValue() == Imm && Imm.isNegative() && (-Imm).isPowerOf2()) {
+      C->getValue() == Imm && Imm.isNegative() && Imm.isNegatedPowerOf2()) {
 
     auto isSSatMin = [&](Value *MinInst) {
       if (isa<SelectInst>(MinInst)) {
@@ -358,12 +359,27 @@ static bool isSSATMinMaxPattern(Instruction *Inst, const APInt &Imm) {
       return false;
     };
 
-    if (isSSatMin(Inst->getOperand(1)) ||
-        (Inst->hasNUses(2) && (isSSatMin(*Inst->user_begin()) ||
-                               isSSatMin(*(++Inst->user_begin())))))
-      return true;
+    if (isSSatMin(Inst->getOperand(1)))
+      return cast<Instruction>(Inst->getOperand(1))->getOperand(1);
+    if (Inst->hasNUses(2) &&
+        (isSSatMin(*Inst->user_begin()) || isSSatMin(*(++Inst->user_begin()))))
+      return Inst->getOperand(1);
   }
-  return false;
+  return nullptr;
+}
+
+// Look for a FP Saturation pattern, where the instruction can be simplified to
+// a fptosi.sat. max(min(fptosi)). The constant in this case is always free.
+static bool isFPSatMinMaxPattern(Instruction *Inst, const APInt &Imm) {
+  if (Imm.getBitWidth() != 64 ||
+      Imm != APInt::getHighBitsSet(64, 33)) // -2147483648
+    return false;
+  Value *FP = isSSATMinMaxPattern(Inst, Imm);
+  if (!FP && isa<ICmpInst>(Inst) && Inst->hasOneUse())
+    FP = isSSATMinMaxPattern(cast<Instruction>(*Inst->user_begin()), Imm);
+  if (!FP)
+    return false;
+  return isa<FPToSIInst>(FP);
 }
 
 InstructionCost ARMTTIImpl::getIntImmCostInst(unsigned Opcode, unsigned Idx,
@@ -410,7 +426,7 @@ InstructionCost ARMTTIImpl::getIntImmCostInst(unsigned Opcode, unsigned Idx,
   }
 
   // xor a, -1 can always be folded to MVN
-  if (Opcode == Instruction::Xor && Imm.isAllOnesValue())
+  if (Opcode == Instruction::Xor && Imm.isAllOnes())
     return 0;
 
   // Ensures negative constant of min(max()) or max(min()) patterns that
@@ -421,6 +437,17 @@ InstructionCost ARMTTIImpl::getIntImmCostInst(unsigned Opcode, unsigned Idx,
         (isa<ICmpInst>(Inst) && Inst->hasOneUse() &&
          isSSATMinMaxPattern(cast<Instruction>(*Inst->user_begin()), Imm)))
       return 0;
+  }
+
+  if (Inst && ST->hasVFP2Base() && isFPSatMinMaxPattern(Inst, Imm))
+    return 0;
+
+  // We can convert <= -1 to < 0, which is generally quite cheap.
+  if (Inst && Opcode == Instruction::ICmp && Idx == 1 && Imm.isAllOnesValue()) {
+    ICmpInst::Predicate Pred = cast<ICmpInst>(Inst)->getPredicate();
+    if (Pred == ICmpInst::ICMP_SGT || Pred == ICmpInst::ICMP_SLE)
+      return std::min(getIntImmCost(Imm, Ty, CostKind),
+                      getIntImmCost(Imm + 1, Ty, CostKind));
   }
 
   return getIntImmCost(Imm, Ty, CostKind);
@@ -1089,18 +1116,6 @@ bool ARMTTIImpl::isLegalMaskedGather(Type *Ty, Align Alignment) {
   if (!EnableMaskedGatherScatters || !ST->hasMVEIntegerOps())
     return false;
 
-  // This method is called in 2 places:
-  //  - from the vectorizer with a scalar type, in which case we need to get
-  //  this as good as we can with the limited info we have (and rely on the cost
-  //  model for the rest).
-  //  - from the masked intrinsic lowering pass with the actual vector type.
-  // For MVE, we have a custom lowering pass that will already have custom
-  // legalised any gathers that we can to MVE intrinsics, and want to expand all
-  // the rest. The pass runs before the masked intrinsic lowering pass, so if we
-  // are here, we know we want to expand.
-  if (isa<VectorType>(Ty))
-    return false;
-
   unsigned EltWidth = Ty->getScalarSizeInBits();
   return ((EltWidth == 32 && Alignment >= 4) ||
           (EltWidth == 16 && Alignment >= 2) || EltWidth == 8);
@@ -1187,7 +1202,8 @@ InstructionCost ARMTTIImpl::getMemcpyCost(const Instruction *I) {
 
 InstructionCost ARMTTIImpl::getShuffleCost(TTI::ShuffleKind Kind,
                                            VectorType *Tp, ArrayRef<int> Mask,
-                                           int Index, VectorType *SubTp) {
+                                           int Index, VectorType *SubTp,
+                                           ArrayRef<const Value *> Args) {
   Kind = improveShuffleKindFromMask(Kind, Mask);
   if (ST->hasNEON()) {
     if (Kind == TTI::SK_Broadcast) {
@@ -1749,6 +1765,48 @@ ARMTTIImpl::getIntrinsicInstrCost(const IntrinsicCostAttributes &ICA,
       return LT.first * ST->getMVEVectorCostFactor(CostKind);
     break;
   }
+  case Intrinsic::fptosi_sat:
+  case Intrinsic::fptoui_sat: {
+    if (ICA.getArgTypes().empty())
+      break;
+    bool IsSigned = ICA.getID() == Intrinsic::fptosi_sat;
+    auto LT = TLI->getTypeLegalizationCost(DL, ICA.getArgTypes()[0]);
+    EVT MTy = TLI->getValueType(DL, ICA.getReturnType());
+    // Check for the legal types, with the corect subtarget features.
+    if ((ST->hasVFP2Base() && LT.second == MVT::f32 && MTy == MVT::i32) ||
+        (ST->hasFP64() && LT.second == MVT::f64 && MTy == MVT::i32) ||
+        (ST->hasFullFP16() && LT.second == MVT::f16 && MTy == MVT::i32))
+      return LT.first;
+
+    // Equally for MVE vector types
+    if (ST->hasMVEFloatOps() &&
+        (LT.second == MVT::v4f32 || LT.second == MVT::v8f16) &&
+        LT.second.getScalarSizeInBits() == MTy.getScalarSizeInBits())
+      return LT.first * ST->getMVEVectorCostFactor(CostKind);
+
+    // Otherwise we use a legal convert followed by a min+max
+    if (((ST->hasVFP2Base() && LT.second == MVT::f32) ||
+         (ST->hasFP64() && LT.second == MVT::f64) ||
+         (ST->hasFullFP16() && LT.second == MVT::f16) ||
+         (ST->hasMVEFloatOps() &&
+          (LT.second == MVT::v4f32 || LT.second == MVT::v8f16))) &&
+        LT.second.getScalarSizeInBits() >= MTy.getScalarSizeInBits()) {
+      Type *LegalTy = Type::getIntNTy(ICA.getReturnType()->getContext(),
+                                      LT.second.getScalarSizeInBits());
+      InstructionCost Cost =
+          LT.second.isVector() ? ST->getMVEVectorCostFactor(CostKind) : 1;
+      IntrinsicCostAttributes Attrs1(IsSigned ? Intrinsic::smin
+                                              : Intrinsic::umin,
+                                     LegalTy, {LegalTy, LegalTy});
+      Cost += getIntrinsicInstrCost(Attrs1, CostKind);
+      IntrinsicCostAttributes Attrs2(IsSigned ? Intrinsic::smax
+                                              : Intrinsic::umax,
+                                     LegalTy, {LegalTy, LegalTy});
+      Cost += getIntrinsicInstrCost(Attrs2, CostKind);
+      return LT.first * Cost;
+    }
+    break;
+  }
   }
 
   return BaseT::getIntrinsicInstrCost(ICA, CostKind);
@@ -1756,7 +1814,7 @@ ARMTTIImpl::getIntrinsicInstrCost(const IntrinsicCostAttributes &ICA,
 
 bool ARMTTIImpl::isLoweredToCall(const Function *F) {
   if (!F->isIntrinsic())
-    BaseT::isLoweredToCall(F);
+    return BaseT::isLoweredToCall(F);
 
   // Assume all Arm-specific intrinsics map to an instruction.
   if (F->getName().startswith("llvm.arm"))
@@ -2094,9 +2152,6 @@ static bool canTailPredicateLoop(Loop *L, LoopInfo *LI, ScalarEvolution &SE,
       }
 
       Type *T  = I.getType();
-      if (T->isPointerTy())
-        T = T->getPointerElementType();
-
       if (T->getScalarSizeInBits() > 32) {
         LLVM_DEBUG(dbgs() << "Unsupported Type: "; T->dump());
         return false;

@@ -32,8 +32,6 @@
 #include "llvm/IR/OperandTraits.h"
 #include "llvm/IR/SymbolTableListTraits.h"
 #include "llvm/IR/Value.h"
-#include "llvm/Support/Casting.h"
-#include "llvm/Support/Compiler.h"
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
@@ -48,6 +46,7 @@ typedef unsigned ID;
 
 class AssemblyAnnotationWriter;
 class Constant;
+struct DenormalMode;
 class DISubprogram;
 class LLVMContext;
 class Module;
@@ -246,33 +245,22 @@ public:
     setValueSubclassData((getSubclassDataFromValue() & 0xc00f) | (ID << 4));
   }
 
-  enum ProfileCountType { PCT_Invalid, PCT_Real, PCT_Synthetic };
+  enum ProfileCountType { PCT_Real, PCT_Synthetic };
 
   /// Class to represent profile counts.
   ///
   /// This class represents both real and synthetic profile counts.
   class ProfileCount {
   private:
-    uint64_t Count;
-    ProfileCountType PCT;
-    static ProfileCount Invalid;
+    uint64_t Count = 0;
+    ProfileCountType PCT = PCT_Real;
 
   public:
-    ProfileCount() : Count(-1), PCT(PCT_Invalid) {}
     ProfileCount(uint64_t Count, ProfileCountType PCT)
         : Count(Count), PCT(PCT) {}
-    bool hasValue() const { return PCT != PCT_Invalid; }
     uint64_t getCount() const { return Count; }
     ProfileCountType getType() const { return PCT; }
     bool isSynthetic() const { return PCT == PCT_Synthetic; }
-    explicit operator bool() { return hasValue(); }
-    bool operator!() const { return !hasValue(); }
-    // Update the count retaining the same profile count type.
-    ProfileCount &setCount(uint64_t C) {
-      Count = C;
-      return *this;
-    }
-    static ProfileCount getInvalid() { return ProfileCount(-1, PCT_Invalid); }
   };
 
   /// Set the entry count for this function.
@@ -292,7 +280,7 @@ public:
   ///
   /// Entry count is the number of times the function was executed.
   /// When AllowSynthetic is false, only pgo_data will be returned.
-  ProfileCount getEntryCount(bool AllowSynthetic = false) const;
+  Optional<ProfileCount> getEntryCount(bool AllowSynthetic = false) const;
 
   /// Return true if the function is annotated with profile data.
   ///
@@ -374,7 +362,7 @@ public:
   /// Remove function attribute from this function.
   void removeFnAttr(StringRef Kind);
 
-  void removeFnAttrs(const AttrBuilder &Attrs);
+  void removeFnAttrs(const AttributeMask &Attrs);
 
   /// removes the attribute from the return value list of attributes.
   void removeRetAttr(Attribute::AttrKind Kind);
@@ -383,7 +371,7 @@ public:
   void removeRetAttr(StringRef Kind);
 
   /// removes the attributes from the return value list of attributes.
-  void removeRetAttrs(const AttrBuilder &Attrs);
+  void removeRetAttrs(const AttributeMask &Attrs);
 
   /// removes the attribute from the list of attributes.
   void removeParamAttr(unsigned ArgNo, Attribute::AttrKind Kind);
@@ -392,7 +380,7 @@ public:
   void removeParamAttr(unsigned ArgNo, StringRef Kind);
 
   /// removes the attribute from the list of attributes.
-  void removeParamAttrs(unsigned ArgNo, const AttrBuilder &Attrs);
+  void removeParamAttrs(unsigned ArgNo, const AttributeMask &Attrs);
 
   /// Return true if the function has the attribute.
   bool hasFnAttribute(Attribute::AttrKind Kind) const;
@@ -444,7 +432,7 @@ public:
   /// Extract the alignment for a call or parameter (0=unknown).
   /// FIXME: Remove this function once transition to Align is over.
   /// Use getParamAlign() instead.
-  unsigned getParamAlignment(unsigned ArgNo) const {
+  uint64_t getParamAlignment(unsigned ArgNo) const {
     if (const auto MA = getParamAlign(ArgNo))
       return MA->value();
     return 0;
@@ -519,10 +507,10 @@ public:
   }
 
   /// Determine if the function does not access or only writes memory.
-  bool doesNotReadMemory() const {
+  bool onlyWritesMemory() const {
     return doesNotAccessMemory() || hasFnAttribute(Attribute::WriteOnly);
   }
-  void setDoesNotReadMemory() {
+  void setOnlyWritesMemory() {
     addFnAttr(Attribute::WriteOnly);
   }
 
@@ -633,15 +621,19 @@ public:
   bool willReturn() const { return hasFnAttribute(Attribute::WillReturn); }
   void setWillReturn() { addFnAttr(Attribute::WillReturn); }
 
+  /// Get what kind of unwind table entry to generate for this function.
+  UWTableKind getUWTableKind() const {
+    return AttributeSets.getUWTableKind();
+  }
+
   /// True if the ABI mandates (or the user requested) that this
   /// function be in a unwind table.
   bool hasUWTable() const {
-    return hasFnAttribute(Attribute::UWTable);
+    return getUWTableKind() != UWTableKind::None;
   }
-  void setHasUWTable() {
-    addFnAttr(Attribute::UWTable);
+  void setUWTableKind(UWTableKind K) {
+    addFnAttr(Attribute::getWithUWTableKind(getContext(), K));
   }
-
   /// True if this function needs an unwind table.
   bool needsUnwindTableEntry() const {
     return hasUWTable() || !doesNotThrow() || hasPersonalityFn();

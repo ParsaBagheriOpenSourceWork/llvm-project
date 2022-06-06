@@ -1,4 +1,4 @@
-//===-------------------------- __cxxabi_config.h -------------------------===//
+//===----------------------------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -95,6 +95,12 @@
 #  endif
 #elif defined(_LIBCXXABI_COMPILER_GCC) && !defined(__EXCEPTIONS)
 #  define _LIBCXXABI_NO_EXCEPTIONS
+#endif
+
+#if defined(_WIN32)
+#define _LIBCXXABI_DTOR_FUNC __thiscall
+#else
+#define _LIBCXXABI_DTOR_FUNC
 #endif
 
 #endif // ____CXXABI_CONFIG_H

@@ -32,7 +32,7 @@ namespace bugprone {
 /// http://clang.llvm.org/extra/clang-tidy/checks/bugprone-reserved-identifier.html
 class ReservedIdentifierCheck final : public RenamerClangTidyCheck {
   const bool Invert;
-  const std::vector<std::string> AllowedIdentifiers;
+  const std::vector<StringRef> AllowedIdentifiers;
 
 public:
   ReservedIdentifierCheck(StringRef Name, ClangTidyContext *Context);
@@ -41,12 +41,12 @@ public:
 
 private:
   llvm::Optional<FailureInfo>
-  GetDeclFailureInfo(const NamedDecl *Decl,
+  getDeclFailureInfo(const NamedDecl *Decl,
                      const SourceManager &SM) const override;
   llvm::Optional<FailureInfo>
-  GetMacroFailureInfo(const Token &MacroNameTok,
+  getMacroFailureInfo(const Token &MacroNameTok,
                       const SourceManager &SM) const override;
-  DiagInfo GetDiagInfo(const NamingCheckId &ID,
+  DiagInfo getDiagInfo(const NamingCheckId &ID,
                        const NamingCheckFailure &Failure) const override;
 };
 

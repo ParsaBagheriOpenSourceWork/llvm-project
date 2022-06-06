@@ -113,9 +113,15 @@ class X86MachineFunctionInfo : public MachineFunctionInfo {
   /// other tools to detect the extended record.
   bool HasSwiftAsyncContext = false;
 
+  /// True if this function has tile virtual register. This is used to
+  /// determine if we should insert tilerelease in frame lowering.
+  bool HasVirtualTileReg = false;
+
   Optional<int> SwiftAsyncContextFrameIdx;
 
-  ValueMap<const Value *, size_t> PreallocatedIds;
+  // Preallocated fields are only used during isel.
+  // FIXME: Can we find somewhere else to store these?
+  DenseMap<const Value *, size_t> PreallocatedIds;
   SmallVector<size_t, 0> PreallocatedStackSizes;
   SmallVector<SmallVector<size_t, 4>, 0> PreallocatedArgOffsets;
 
@@ -206,6 +212,9 @@ public:
 
   bool hasSwiftAsyncContext() const { return HasSwiftAsyncContext; }
   void setHasSwiftAsyncContext(bool v) { HasSwiftAsyncContext = v; }
+
+  bool hasVirtualTileReg() const { return HasVirtualTileReg; }
+  void setHasVirtualTileReg(bool v) { HasVirtualTileReg = v; }
 
   Optional<int> getSwiftAsyncContextFrameIdx() const {
     return SwiftAsyncContextFrameIdx;

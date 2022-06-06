@@ -12,6 +12,15 @@
 #ifndef OMPTARGET_TYPES_H
 #define OMPTARGET_TYPES_H
 
+// Tell the compiler that we do not have any "call-like" inline assembly in the
+// device rutime. That means we cannot have inline assembly which will call
+// another function but only inline assembly that performs some operation or
+// side-effect and then continues execution with something on the existing call
+// stack.
+//
+// TODO: Find a good place for this
+#pragma omp assumes ext_no_call_asm
+
 /// Base type declarations for freestanding mode
 ///
 ///{
@@ -177,6 +186,11 @@ typedef enum omp_allocator_handle_t {
   omp_thread_mem_alloc = 8,
   KMP_ALLOCATOR_MAX_HANDLE = ~(0U)
 } omp_allocator_handle_t;
+
+enum OMPTgtExecModeFlags : int8_t {
+  OMP_TGT_EXEC_MODE_GENERIC = 1 << 0,
+  OMP_TGT_EXEC_MODE_SPMD = 1 << 1,
+};
 
 #define __PRAGMA(STR) _Pragma(#STR)
 #define OMP_PRAGMA(STR) __PRAGMA(omp STR)

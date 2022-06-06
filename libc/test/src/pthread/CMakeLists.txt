@@ -1,0 +1,58 @@
+add_libc_testsuite(libc_pthread_unittests)
+
+add_libc_unittest(
+  pthread_attr_test
+  SUITE
+    libc_pthread_unittests
+  SRCS
+    pthread_attr_test.cpp
+  DEPENDS
+    libc.include.errno
+    libc.include.pthread
+    libc.src.pthread.pthread_attr_destroy
+    libc.src.pthread.pthread_attr_init
+    libc.src.pthread.pthread_attr_getdetachstate
+    libc.src.pthread.pthread_attr_getguardsize
+    libc.src.pthread.pthread_attr_getstacksize
+    libc.src.pthread.pthread_attr_getstack
+    libc.src.pthread.pthread_attr_setdetachstate
+    libc.src.pthread.pthread_attr_setguardsize
+    libc.src.pthread.pthread_attr_setstacksize
+    libc.src.pthread.pthread_attr_setstack
+)
+
+add_libc_unittest(
+  pthread_mutexattr_test
+  SUITE
+    libc_pthread_unittests
+  SRCS
+    pthread_mutexattr_test.cpp
+  DEPENDS
+    libc.include.errno
+    libc.include.pthread
+    libc.src.pthread.pthread_mutexattr_destroy
+    libc.src.pthread.pthread_mutexattr_init
+    libc.src.pthread.pthread_mutexattr_getpshared
+    libc.src.pthread.pthread_mutexattr_getrobust
+    libc.src.pthread.pthread_mutexattr_gettype
+    libc.src.pthread.pthread_mutexattr_setpshared
+    libc.src.pthread.pthread_mutexattr_setrobust
+    libc.src.pthread.pthread_mutexattr_settype
+)
+
+add_libc_unittest(
+  phtread_mutex_test
+  SUITE
+    libc_pthread_unittests
+  SRCS
+    pthread_mutex_test.cpp
+  DEPENDS
+    libc.include.pthread
+    libc.src.errno.errno
+    libc.src.pthread.pthread_mutex_destroy
+    libc.src.pthread.pthread_mutex_init
+    libc.src.pthread.pthread_mutex_lock
+    libc.src.pthread.pthread_mutex_unlock
+    libc.src.threads.thrd_create
+    libc.src.threads.thrd_join
+)

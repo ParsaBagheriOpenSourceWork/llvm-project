@@ -49,7 +49,6 @@ Command Line Options
 
   * FileChanged
   * FileSkipped
-  * FileNotFound
   * InclusionDirective
   * moduleImport
   * EndOfMainFile
@@ -161,7 +160,7 @@ of a file.
 Argument descriptions:
 
 ==============   ==================================================   ============================== ==============================
-Argument Name    Argument Value Syntax                                Clang C++ Type                 Description           
+Argument Name    Argument Value Syntax                                Clang C++ Type                 Description
 ==============   ==================================================   ============================== ==============================
 Loc              "(file):(line):(col)"                                SourceLocation                 The location of the directive.
 Reason           (EnterFile|ExitFile|SystemHeaderPragma|RenameFile)   PPCallbacks::FileChangeReason  Reason for change.
@@ -186,7 +185,7 @@ guard optimization.
 Argument descriptions:
 
 ==============   ==================================================   ============================== ========================================================
-Argument Name    Argument Value Syntax                                Clang C++ Type                 Description           
+Argument Name    Argument Value Syntax                                Clang C++ Type                 Description
 ==============   ==================================================   ============================== ========================================================
 ParentFile       ("(file)" or (null))                                 const FileEntry                The file that #included the skipped file.
 FilenameTok      (token)                                              const Token                    The token in ParentFile that indicates the skipped file.
@@ -200,26 +199,6 @@ Example:::
     FilenameTok: "filename.h"
     FileType: C_User
 
-`FileNotFound <https://clang.llvm.org/doxygen/classclang_1_1PPCallbacks.html#a3045151545f987256bfa8d978916ef00>`_ Callback
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-FileNotFound is called when an inclusion directive results in a file-not-found error.
-
-Argument descriptions:
-
-==============   ==================================================   ============================== =====================================================================================================================================
-Argument Name    Argument Value Syntax                                Clang C++ Type                 Description           
-==============   ==================================================   ============================== =====================================================================================================================================
-FileName         "(file)"                                             StringRef                      The name of the file being included, as written in the source code.
-RecoveryPath     (path)                                               SmallVectorImpl<char>          If this client indicates that it can recover from this missing file, the client should set this as an additional header search patch.
-==============   ==================================================   ============================== =====================================================================================================================================
-
-Example:::
-
-  - Callback: FileNotFound
-    FileName: "/path/filename.h"
-    RecoveryPath:
-
 `InclusionDirective <https://clang.llvm.org/doxygen/classclang_1_1PPCallbacks.html#a557d9738c329793513a6f57d6b60de52>`_ Callback
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
@@ -228,7 +207,7 @@ InclusionDirective is called when an inclusion directive of any kind (#include</
 Argument descriptions:
 
 ==============   ==================================================   ============================== ============================================================================================================
-Argument Name    Argument Value Syntax                                Clang C++ Type                 Description           
+Argument Name    Argument Value Syntax                                Clang C++ Type                 Description
 ==============   ==================================================   ============================== ============================================================================================================
 HashLoc          "(file):(line):(col)"                                SourceLocation                 The location of the '#' that starts the inclusion directive.
 IncludeTok       (token)                                              const Token                    The token that indicates the kind of inclusion directive, e.g., 'include' or 'import'.
@@ -261,7 +240,7 @@ moduleImport is called when there was an explicit module-import syntax.
 Argument descriptions:
 
 ==============   ==================================================   ============================== ===========================================================
-Argument Name    Argument Value Syntax                                Clang C++ Type                 Description           
+Argument Name    Argument Value Syntax                                Clang C++ Type                 Description
 ==============   ==================================================   ============================== ===========================================================
 ImportLoc        "(file):(line):(col)"                                SourceLocation                 The location of import directive token.
 Path             "(path)"                                             ModuleIdPath                   The identifiers (and their locations) of the module "path".
@@ -283,7 +262,7 @@ EndOfMainFile is called when the end of the main file is reached.
 Argument descriptions:
 
 ==============   ==================================================   ============================== ======================
-Argument Name    Argument Value Syntax                                Clang C++ Type                 Description           
+Argument Name    Argument Value Syntax                                Clang C++ Type                 Description
 ==============   ==================================================   ============================== ======================
 (no arguments)
 ==============   ==================================================   ============================== ======================
@@ -300,7 +279,7 @@ Ident is called when a #ident or #sccs directive is read.
 Argument descriptions:
 
 ==============   ==================================================   ============================== ==============================
-Argument Name    Argument Value Syntax                                Clang C++ Type                 Description           
+Argument Name    Argument Value Syntax                                Clang C++ Type                 Description
 ==============   ==================================================   ============================== ==============================
 Loc              "(file):(line):(col)"                                SourceLocation                 The location of the directive.
 str              (name)                                               const std::string              The text of the directive.
@@ -320,7 +299,7 @@ PragmaDirective is called when start reading any pragma directive.
 Argument descriptions:
 
 ==============   ==================================================   ============================== =================================
-Argument Name    Argument Value Syntax                                Clang C++ Type                 Description           
+Argument Name    Argument Value Syntax                                Clang C++ Type                 Description
 ==============   ==================================================   ============================== =================================
 Loc              "(file):(line):(col)"                                SourceLocation                 The location of the directive.
 Introducer       (PIK_HashPragma|PIK__Pragma|PIK___pragma)            PragmaIntroducerKind           The type of the pragma directive.
@@ -340,7 +319,7 @@ PragmaComment is called when a #pragma comment directive is read.
 Argument descriptions:
 
 ==============   ==================================================   ============================== ==============================
-Argument Name    Argument Value Syntax                                Clang C++ Type                 Description           
+Argument Name    Argument Value Syntax                                Clang C++ Type                 Description
 ==============   ==================================================   ============================== ==============================
 Loc              "(file):(line):(col)"                                SourceLocation                 The location of the directive.
 Kind             ((name)|(null))                                      const IdentifierInfo           The comment kind symbol.
@@ -362,7 +341,7 @@ PragmaDetectMismatch is called when a #pragma detect_mismatch directive is read.
 Argument descriptions:
 
 ==============   ==================================================   ============================== ==============================
-Argument Name    Argument Value Syntax                                Clang C++ Type                 Description           
+Argument Name    Argument Value Syntax                                Clang C++ Type                 Description
 ==============   ==================================================   ============================== ==============================
 Loc              "(file):(line):(col)"                                SourceLocation                 The location of the directive.
 Name             "(name)"                                             const std::string              The name.
@@ -384,7 +363,7 @@ PragmaDebug is called when a #pragma clang __debug directive is read.
 Argument descriptions:
 
 ==============   ==================================================   ============================== ================================
-Argument Name    Argument Value Syntax                                Clang C++ Type                 Description           
+Argument Name    Argument Value Syntax                                Clang C++ Type                 Description
 ==============   ==================================================   ============================== ================================
 Loc              "(file):(line):(col)"                                SourceLocation                 The location of the directive.
 DebugType        (string)                                             StringRef                      Indicates type of debug message.
@@ -404,7 +383,7 @@ PragmaMessage is called when a #pragma message directive is read.
 Argument descriptions:
 
 ==============   ==================================================   ============================== =======================================
-Argument Name    Argument Value Syntax                                Clang C++ Type                 Description           
+Argument Name    Argument Value Syntax                                Clang C++ Type                 Description
 ==============   ==================================================   ============================== =======================================
 Loc              "(file):(line):(col)"                                SourceLocation                 The location of the directive.
 Namespace        (name)                                               StringRef                      The namespace of the message directive.
@@ -428,7 +407,7 @@ PragmaDiagnosticPush is called when a #pragma gcc diagnostic push directive is r
 Argument descriptions:
 
 ==============   ==================================================   ============================== ==============================
-Argument Name    Argument Value Syntax                                Clang C++ Type                 Description           
+Argument Name    Argument Value Syntax                                Clang C++ Type                 Description
 ==============   ==================================================   ============================== ==============================
 Loc              "(file):(line):(col)"                                SourceLocation                 The location of the directive.
 Namespace        (name)                                               StringRef                      Namespace name.
@@ -448,7 +427,7 @@ PragmaDiagnosticPop is called when a #pragma gcc diagnostic pop directive is rea
 Argument descriptions:
 
 ==============   ==================================================   ============================== ==============================
-Argument Name    Argument Value Syntax                                Clang C++ Type                 Description           
+Argument Name    Argument Value Syntax                                Clang C++ Type                 Description
 ==============   ==================================================   ============================== ==============================
 Loc              "(file):(line):(col)"                                SourceLocation                 The location of the directive.
 Namespace        (name)                                               StringRef                      Namespace name.
@@ -468,7 +447,7 @@ PragmaDiagnostic is called when a #pragma gcc diagnostic directive is read.
 Argument descriptions:
 
 ==============   ==================================================   ============================== ==============================
-Argument Name    Argument Value Syntax                                Clang C++ Type                 Description           
+Argument Name    Argument Value Syntax                                Clang C++ Type                 Description
 ==============   ==================================================   ============================== ==============================
 Loc              "(file):(line):(col)"                                SourceLocation                 The location of the directive.
 Namespace        (name)                                               StringRef                      Namespace name.
@@ -492,7 +471,7 @@ PragmaOpenCLExtension is called when OpenCL extension is either disabled or enab
 Argument descriptions:
 
 ==============   ==================================================   ============================== ==========================
-Argument Name    Argument Value Syntax                                Clang C++ Type                 Description           
+Argument Name    Argument Value Syntax                                Clang C++ Type                 Description
 ==============   ==================================================   ============================== ==========================
 NameLoc          "(file):(line):(col)"                                SourceLocation                 The location of the name.
 Name             (name)                                               const IdentifierInfo           Name symbol.
@@ -516,7 +495,7 @@ PragmaWarning is called when a #pragma warning directive is read.
 Argument descriptions:
 
 ==============   ==================================================   ============================== ==============================
-Argument Name    Argument Value Syntax                                Clang C++ Type                 Description           
+Argument Name    Argument Value Syntax                                Clang C++ Type                 Description
 ==============   ==================================================   ============================== ==============================
 Loc              "(file):(line):(col)"                                SourceLocation                 The location of the directive.
 WarningSpec      (string)                                             StringRef                      The warning specifier.
@@ -538,7 +517,7 @@ PragmaWarningPush is called when a #pragma warning(push) directive is read.
 Argument descriptions:
 
 ==============   ==================================================   ============================== ==============================
-Argument Name    Argument Value Syntax                                Clang C++ Type                 Description           
+Argument Name    Argument Value Syntax                                Clang C++ Type                 Description
 ==============   ==================================================   ============================== ==============================
 Loc              "(file):(line):(col)"                                SourceLocation                 The location of the directive.
 Level            (number)                                             int                            Warning level.
@@ -558,7 +537,7 @@ PragmaWarningPop is called when a #pragma warning(pop) directive is read.
 Argument descriptions:
 
 ==============   ==================================================   ============================== ==============================
-Argument Name    Argument Value Syntax                                Clang C++ Type                 Description           
+Argument Name    Argument Value Syntax                                Clang C++ Type                 Description
 ==============   ==================================================   ============================== ==============================
 Loc              "(file):(line):(col)"                                SourceLocation                 The location of the directive.
 ==============   ==================================================   ============================== ==============================
@@ -576,7 +555,7 @@ MacroExpands is called when ::HandleMacroExpandedIdentifier when a macro invocat
 Argument descriptions:
 
 ==============   ==================================================   ============================== ======================================================================================================
-Argument Name    Argument Value Syntax                                Clang C++ Type                 Description           
+Argument Name    Argument Value Syntax                                Clang C++ Type                 Description
 ==============   ==================================================   ============================== ======================================================================================================
 MacroNameTok     (token)                                              const Token                    The macro name token.
 MacroDirective   (MD_Define|MD_Undefine|MD_Visibility)                const MacroDirective           The kind of macro directive from the MacroDirective structure.
@@ -600,7 +579,7 @@ MacroDefined is called when a macro definition is seen.
 Argument descriptions:
 
 ==============   ==================================================   ============================== ==============================================================
-Argument Name    Argument Value Syntax                                Clang C++ Type                 Description           
+Argument Name    Argument Value Syntax                                Clang C++ Type                 Description
 ==============   ==================================================   ============================== ==============================================================
 MacroNameTok     (token)                                              const Token                    The macro name token.
 MacroDirective   (MD_Define|MD_Undefine|MD_Visibility)                const MacroDirective           The kind of macro directive from the MacroDirective structure.
@@ -620,7 +599,7 @@ MacroUndefined is called when a macro #undef is seen.
 Argument descriptions:
 
 ==============   ==================================================   ============================== ==============================================================
-Argument Name    Argument Value Syntax                                Clang C++ Type                 Description           
+Argument Name    Argument Value Syntax                                Clang C++ Type                 Description
 ==============   ==================================================   ============================== ==============================================================
 MacroNameTok     (token)                                              const Token                    The macro name token.
 MacroDirective   (MD_Define|MD_Undefine|MD_Visibility)                const MacroDirective           The kind of macro directive from the MacroDirective structure.
@@ -640,7 +619,7 @@ Defined is called when the 'defined' operator is seen.
 Argument descriptions:
 
 ==============   ==================================================   ============================== ==============================================================
-Argument Name    Argument Value Syntax                                Clang C++ Type                 Description           
+Argument Name    Argument Value Syntax                                Clang C++ Type                 Description
 ==============   ==================================================   ============================== ==============================================================
 MacroNameTok     (token)                                              const Token                    The macro name token.
 MacroDirective   (MD_Define|MD_Undefine|MD_Visibility)                const MacroDirective           The kind of macro directive from the MacroDirective structure.
@@ -662,7 +641,7 @@ SourceRangeSkipped is called when a source range is skipped.
 Argument descriptions:
 
 ==============   ==================================================   ============================== =========================
-Argument Name    Argument Value Syntax                                Clang C++ Type                 Description           
+Argument Name    Argument Value Syntax                                Clang C++ Type                 Description
 ==============   ==================================================   ============================== =========================
 Range            ["(file):(line):(col)", "(file):(line):(col)"]       SourceRange                    The source range skipped.
 ==============   ==================================================   ============================== =========================
@@ -680,7 +659,7 @@ If is called when an #if is seen.
 Argument descriptions:
 
 ==============   ==================================================   ============================== ===================================
-Argument Name    Argument Value Syntax                                Clang C++ Type                 Description           
+Argument Name    Argument Value Syntax                                Clang C++ Type                 Description
 ==============   ==================================================   ============================== ===================================
 Loc              "(file):(line):(col)"                                SourceLocation                 The location of the directive.
 ConditionRange   ["(file):(line):(col)", "(file):(line):(col)"]       SourceRange                    The source range for the condition.
@@ -702,7 +681,7 @@ Elif is called when an #elif is seen.
 Argument descriptions:
 
 ==============   ==================================================   ============================== ===================================
-Argument Name    Argument Value Syntax                                Clang C++ Type                 Description           
+Argument Name    Argument Value Syntax                                Clang C++ Type                 Description
 ==============   ==================================================   ============================== ===================================
 Loc              "(file):(line):(col)"                                SourceLocation                 The location of the directive.
 ConditionRange   ["(file):(line):(col)", "(file):(line):(col)"]       SourceRange                    The source range for the condition.
@@ -726,7 +705,7 @@ Ifdef is called when an #ifdef is seen.
 Argument descriptions:
 
 ==============   ==================================================   ============================== ==============================================================
-Argument Name    Argument Value Syntax                                Clang C++ Type                 Description           
+Argument Name    Argument Value Syntax                                Clang C++ Type                 Description
 ==============   ==================================================   ============================== ==============================================================
 Loc              "(file):(line):(col)"                                SourceLocation                 The location of the directive.
 MacroNameTok     (token)                                              const Token                    The macro name token.
@@ -748,7 +727,7 @@ Ifndef is called when an #ifndef is seen.
 Argument descriptions:
 
 ==============   ==================================================   ============================== ==============================================================
-Argument Name    Argument Value Syntax                                Clang C++ Type                 Description           
+Argument Name    Argument Value Syntax                                Clang C++ Type                 Description
 ==============   ==================================================   ============================== ==============================================================
 Loc              "(file):(line):(col)"                                SourceLocation                 The location of the directive.
 MacroNameTok     (token)                                              const Token                    The macro name token.
@@ -770,7 +749,7 @@ Else is called when an #else is seen.
 Argument descriptions:
 
 ==============   ==================================================   ============================== ===================================
-Argument Name    Argument Value Syntax                                Clang C++ Type                 Description           
+Argument Name    Argument Value Syntax                                Clang C++ Type                 Description
 ==============   ==================================================   ============================== ===================================
 Loc              "(file):(line):(col)"                                SourceLocation                 The location of the else directive.
 IfLoc            "(file):(line):(col)"                                SourceLocation                 The location of the if directive.
@@ -790,7 +769,7 @@ Endif is called when an #endif is seen.
 Argument descriptions:
 
 ==============   ==================================================   ============================== ====================================
-Argument Name    Argument Value Syntax                                Clang C++ Type                 Description           
+Argument Name    Argument Value Syntax                                Clang C++ Type                 Description
 ==============   ==================================================   ============================== ====================================
 Loc              "(file):(line):(col)"                                SourceLocation                 The location of the endif directive.
 IfLoc            "(file):(line):(col)"                                SourceLocation                 The location of the if directive.
@@ -822,4 +801,3 @@ To build from source:
 .. _Getting Started with the LLVM System: https://llvm.org/docs/GettingStarted.html
 .. _Building LLVM with CMake: https://llvm.org/docs/CMake.html
 .. _Clang Tools Documentation: https://clang.llvm.org/docs/ClangTools.html
-

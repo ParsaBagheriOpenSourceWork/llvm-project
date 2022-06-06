@@ -21,7 +21,6 @@
 namespace llvm {
 
 class GCNTargetMachine;
-class LLVMContext;
 class GCNSubtarget;
 class MachineIRBuilder;
 
@@ -97,9 +96,18 @@ public:
                       const TargetRegisterClass *ArgRC, LLT ArgTy) const;
   bool loadInputValue(Register DstReg, MachineIRBuilder &B,
                       AMDGPUFunctionArgInfo::PreloadedValue ArgType) const;
+
   bool legalizePreloadedArgIntrin(
     MachineInstr &MI, MachineRegisterInfo &MRI, MachineIRBuilder &B,
     AMDGPUFunctionArgInfo::PreloadedValue ArgType) const;
+  bool legalizeWorkitemIDIntrinsic(
+      MachineInstr &MI, MachineRegisterInfo &MRI, MachineIRBuilder &B,
+      unsigned Dim, AMDGPUFunctionArgInfo::PreloadedValue ArgType) const;
+
+  Register getKernargParameterPtr(MachineIRBuilder &B, int64_t Offset) const;
+  bool legalizeKernargMemParameter(MachineInstr &MI, MachineIRBuilder &B,
+                                   uint64_t Offset,
+                                   Align Alignment = Align(4)) const;
 
   bool legalizeUnsignedDIV_REM(MachineInstr &MI, MachineRegisterInfo &MRI,
                                MachineIRBuilder &B) const;
@@ -109,8 +117,8 @@ public:
                                      Register Den) const;
 
   void legalizeUnsignedDIV_REM64Impl(MachineIRBuilder &B, Register DstDivReg,
-                                     Register DstRemReg, Register Numer,
-                                     Register Denom) const;
+                                     Register DstRemReg, Register Num,
+                                     Register Den) const;
 
   bool legalizeSignedDIV_REM(MachineInstr &MI, MachineRegisterInfo &MRI,
                              MachineIRBuilder &B) const;
@@ -169,6 +177,8 @@ public:
                             Intrinsic::ID IID) const;
 
   bool legalizeBVHIntrinsic(MachineInstr &MI, MachineIRBuilder &B) const;
+
+  bool legalizeFPTruncRound(MachineInstr &MI, MachineIRBuilder &B) const;
 
   bool legalizeImageIntrinsic(
       MachineInstr &MI, MachineIRBuilder &B,

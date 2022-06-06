@@ -56,7 +56,6 @@
 #include "llvm/Transforms/Utils/SizeOpts.h"
 #include <algorithm>
 #include <cassert>
-#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <iterator>
@@ -202,7 +201,7 @@ void TargetLoweringBase::InitLibcalls(const Triple &TT) {
     setLibcallName(RTLIB::SINCOS_PPCF128, "sincosl");
   }
 
-  if (TT.isPS4CPU()) {
+  if (TT.isPS4()) {
     setLibcallName(RTLIB::SINCOS_F32, "sincosf");
     setLibcallName(RTLIB::SINCOS_F64, "sincos");
   }
@@ -662,7 +661,7 @@ RTLIB::Libcall RTLIB::getMEMSET_ELEMENT_UNORDERED_ATOMIC(uint64_t ElementSize) {
 
 /// InitCmpLibcallCCs - Set default comparison libcall CC.
 static void InitCmpLibcallCCs(ISD::CondCode *CCs) {
-  memset(CCs, ISD::SETCC_INVALID, sizeof(ISD::CondCode)*RTLIB::UNKNOWN_LIBCALL);
+  std::fill(CCs, CCs + RTLIB::UNKNOWN_LIBCALL, ISD::SETCC_INVALID);
   CCs[RTLIB::OEQ_F32] = ISD::SETEQ;
   CCs[RTLIB::OEQ_F64] = ISD::SETEQ;
   CCs[RTLIB::OEQ_F128] = ISD::SETEQ;
@@ -715,6 +714,7 @@ TargetLoweringBase::TargetLoweringBase(const TargetMachine &tm) : TM(tm) {
   SchedPreferenceInfo = Sched::ILP;
   GatherAllAliasesMaxDepth = 18;
   IsStrictFPEnabled = DisableStrictNodeMutation;
+  MaxBytesForAlignment = 0;
   // TODO: the default will be switched to 0 in the next commit, along
   // with the Target-specific changes necessary.
   MaxAtomicSizeInBitsSupported = 1024;
@@ -762,85 +762,63 @@ void TargetLoweringBase::initActions() {
     setOperationAction(ISD::ATOMIC_CMP_SWAP_WITH_SUCCESS, VT, Expand);
 
     // These operations default to expand.
-    setOperationAction(ISD::FGETSIGN, VT, Expand);
-    setOperationAction(ISD::CONCAT_VECTORS, VT, Expand);
-    setOperationAction(ISD::FMINNUM, VT, Expand);
-    setOperationAction(ISD::FMAXNUM, VT, Expand);
-    setOperationAction(ISD::FMINNUM_IEEE, VT, Expand);
-    setOperationAction(ISD::FMAXNUM_IEEE, VT, Expand);
-    setOperationAction(ISD::FMINIMUM, VT, Expand);
-    setOperationAction(ISD::FMAXIMUM, VT, Expand);
-    setOperationAction(ISD::FMAD, VT, Expand);
-    setOperationAction(ISD::SMIN, VT, Expand);
-    setOperationAction(ISD::SMAX, VT, Expand);
-    setOperationAction(ISD::UMIN, VT, Expand);
-    setOperationAction(ISD::UMAX, VT, Expand);
-    setOperationAction(ISD::ABS, VT, Expand);
-    setOperationAction(ISD::FSHL, VT, Expand);
-    setOperationAction(ISD::FSHR, VT, Expand);
-    setOperationAction(ISD::SADDSAT, VT, Expand);
-    setOperationAction(ISD::UADDSAT, VT, Expand);
-    setOperationAction(ISD::SSUBSAT, VT, Expand);
-    setOperationAction(ISD::USUBSAT, VT, Expand);
-    setOperationAction(ISD::SSHLSAT, VT, Expand);
-    setOperationAction(ISD::USHLSAT, VT, Expand);
-    setOperationAction(ISD::SMULFIX, VT, Expand);
-    setOperationAction(ISD::SMULFIXSAT, VT, Expand);
-    setOperationAction(ISD::UMULFIX, VT, Expand);
-    setOperationAction(ISD::UMULFIXSAT, VT, Expand);
-    setOperationAction(ISD::SDIVFIX, VT, Expand);
-    setOperationAction(ISD::SDIVFIXSAT, VT, Expand);
-    setOperationAction(ISD::UDIVFIX, VT, Expand);
-    setOperationAction(ISD::UDIVFIXSAT, VT, Expand);
-    setOperationAction(ISD::FP_TO_SINT_SAT, VT, Expand);
-    setOperationAction(ISD::FP_TO_UINT_SAT, VT, Expand);
+    setOperationAction({ISD::FGETSIGN,       ISD::CONCAT_VECTORS,
+                        ISD::FMINNUM,        ISD::FMAXNUM,
+                        ISD::FMINNUM_IEEE,   ISD::FMAXNUM_IEEE,
+                        ISD::FMINIMUM,       ISD::FMAXIMUM,
+                        ISD::FMAD,           ISD::SMIN,
+                        ISD::SMAX,           ISD::UMIN,
+                        ISD::UMAX,           ISD::ABS,
+                        ISD::FSHL,           ISD::FSHR,
+                        ISD::SADDSAT,        ISD::UADDSAT,
+                        ISD::SSUBSAT,        ISD::USUBSAT,
+                        ISD::SSHLSAT,        ISD::USHLSAT,
+                        ISD::SMULFIX,        ISD::SMULFIXSAT,
+                        ISD::UMULFIX,        ISD::UMULFIXSAT,
+                        ISD::SDIVFIX,        ISD::SDIVFIXSAT,
+                        ISD::UDIVFIX,        ISD::UDIVFIXSAT,
+                        ISD::FP_TO_SINT_SAT, ISD::FP_TO_UINT_SAT,
+                        ISD::IS_FPCLASS},
+                       VT, Expand);
 
     // Overflow operations default to expand
-    setOperationAction(ISD::SADDO, VT, Expand);
-    setOperationAction(ISD::SSUBO, VT, Expand);
-    setOperationAction(ISD::UADDO, VT, Expand);
-    setOperationAction(ISD::USUBO, VT, Expand);
-    setOperationAction(ISD::SMULO, VT, Expand);
-    setOperationAction(ISD::UMULO, VT, Expand);
+    setOperationAction({ISD::SADDO, ISD::SSUBO, ISD::UADDO, ISD::USUBO,
+                        ISD::SMULO, ISD::UMULO},
+                       VT, Expand);
 
     // ADDCARRY operations default to expand
-    setOperationAction(ISD::ADDCARRY, VT, Expand);
-    setOperationAction(ISD::SUBCARRY, VT, Expand);
-    setOperationAction(ISD::SETCCCARRY, VT, Expand);
-    setOperationAction(ISD::SADDO_CARRY, VT, Expand);
-    setOperationAction(ISD::SSUBO_CARRY, VT, Expand);
+    setOperationAction({ISD::ADDCARRY, ISD::SUBCARRY, ISD::SETCCCARRY,
+                        ISD::SADDO_CARRY, ISD::SSUBO_CARRY},
+                       VT, Expand);
 
     // ADDC/ADDE/SUBC/SUBE default to expand.
-    setOperationAction(ISD::ADDC, VT, Expand);
-    setOperationAction(ISD::ADDE, VT, Expand);
-    setOperationAction(ISD::SUBC, VT, Expand);
-    setOperationAction(ISD::SUBE, VT, Expand);
+    setOperationAction({ISD::ADDC, ISD::ADDE, ISD::SUBC, ISD::SUBE}, VT,
+                       Expand);
+
+    // Halving adds
+    setOperationAction(
+        {ISD::AVGFLOORS, ISD::AVGFLOORU, ISD::AVGCEILS, ISD::AVGCEILU}, VT,
+        Expand);
 
     // Absolute difference
-    setOperationAction(ISD::ABDS, VT, Expand);
-    setOperationAction(ISD::ABDU, VT, Expand);
+    setOperationAction({ISD::ABDS, ISD::ABDU}, VT, Expand);
 
     // These default to Expand so they will be expanded to CTLZ/CTTZ by default.
-    setOperationAction(ISD::CTLZ_ZERO_UNDEF, VT, Expand);
-    setOperationAction(ISD::CTTZ_ZERO_UNDEF, VT, Expand);
+    setOperationAction({ISD::CTLZ_ZERO_UNDEF, ISD::CTTZ_ZERO_UNDEF}, VT,
+                       Expand);
 
-    setOperationAction(ISD::BITREVERSE, VT, Expand);
-    setOperationAction(ISD::PARITY, VT, Expand);
+    setOperationAction({ISD::BITREVERSE, ISD::PARITY}, VT, Expand);
 
     // These library functions default to expand.
-    setOperationAction(ISD::FROUND, VT, Expand);
-    setOperationAction(ISD::FROUNDEVEN, VT, Expand);
-    setOperationAction(ISD::FPOWI, VT, Expand);
+    setOperationAction({ISD::FROUND, ISD::FROUNDEVEN, ISD::FPOWI}, VT, Expand);
 
     // These operations default to expand for vector types.
-    if (VT.isVector()) {
-      setOperationAction(ISD::FCOPYSIGN, VT, Expand);
-      setOperationAction(ISD::SIGN_EXTEND_INREG, VT, Expand);
-      setOperationAction(ISD::ANY_EXTEND_VECTOR_INREG, VT, Expand);
-      setOperationAction(ISD::SIGN_EXTEND_VECTOR_INREG, VT, Expand);
-      setOperationAction(ISD::ZERO_EXTEND_VECTOR_INREG, VT, Expand);
-      setOperationAction(ISD::SPLAT_VECTOR, VT, Expand);
-    }
+    if (VT.isVector())
+      setOperationAction({ISD::FCOPYSIGN, ISD::SIGN_EXTEND_INREG,
+                          ISD::ANY_EXTEND_VECTOR_INREG,
+                          ISD::SIGN_EXTEND_VECTOR_INREG,
+                          ISD::ZERO_EXTEND_VECTOR_INREG, ISD::SPLAT_VECTOR},
+                         VT, Expand);
 
     // Constrained floating-point operations default to expand.
 #define DAG_INSTRUCTION(NAME, NARG, ROUND_MODE, INTRINSIC, DAGN)               \
@@ -851,21 +829,13 @@ void TargetLoweringBase::initActions() {
     setOperationAction(ISD::GET_DYNAMIC_AREA_OFFSET, VT, Expand);
 
     // Vector reduction default to expand.
-    setOperationAction(ISD::VECREDUCE_FADD, VT, Expand);
-    setOperationAction(ISD::VECREDUCE_FMUL, VT, Expand);
-    setOperationAction(ISD::VECREDUCE_ADD, VT, Expand);
-    setOperationAction(ISD::VECREDUCE_MUL, VT, Expand);
-    setOperationAction(ISD::VECREDUCE_AND, VT, Expand);
-    setOperationAction(ISD::VECREDUCE_OR, VT, Expand);
-    setOperationAction(ISD::VECREDUCE_XOR, VT, Expand);
-    setOperationAction(ISD::VECREDUCE_SMAX, VT, Expand);
-    setOperationAction(ISD::VECREDUCE_SMIN, VT, Expand);
-    setOperationAction(ISD::VECREDUCE_UMAX, VT, Expand);
-    setOperationAction(ISD::VECREDUCE_UMIN, VT, Expand);
-    setOperationAction(ISD::VECREDUCE_FMAX, VT, Expand);
-    setOperationAction(ISD::VECREDUCE_FMIN, VT, Expand);
-    setOperationAction(ISD::VECREDUCE_SEQ_FADD, VT, Expand);
-    setOperationAction(ISD::VECREDUCE_SEQ_FMUL, VT, Expand);
+    setOperationAction(
+        {ISD::VECREDUCE_FADD, ISD::VECREDUCE_FMUL, ISD::VECREDUCE_ADD,
+         ISD::VECREDUCE_MUL, ISD::VECREDUCE_AND, ISD::VECREDUCE_OR,
+         ISD::VECREDUCE_XOR, ISD::VECREDUCE_SMAX, ISD::VECREDUCE_SMIN,
+         ISD::VECREDUCE_UMAX, ISD::VECREDUCE_UMIN, ISD::VECREDUCE_FMAX,
+         ISD::VECREDUCE_FMIN, ISD::VECREDUCE_SEQ_FADD, ISD::VECREDUCE_SEQ_FMUL},
+        VT, Expand);
 
     // Named vector shuffles default to expand.
     setOperationAction(ISD::VECTOR_SPLICE, VT, Expand);
@@ -880,32 +850,16 @@ void TargetLoweringBase::initActions() {
   // ConstantFP nodes default to expand.  Targets can either change this to
   // Legal, in which case all fp constants are legal, or use isFPImmLegal()
   // to optimize expansions for certain constants.
-  setOperationAction(ISD::ConstantFP, MVT::f16, Expand);
-  setOperationAction(ISD::ConstantFP, MVT::f32, Expand);
-  setOperationAction(ISD::ConstantFP, MVT::f64, Expand);
-  setOperationAction(ISD::ConstantFP, MVT::f80, Expand);
-  setOperationAction(ISD::ConstantFP, MVT::f128, Expand);
+  setOperationAction(ISD::ConstantFP,
+                     {MVT::f16, MVT::f32, MVT::f64, MVT::f80, MVT::f128},
+                     Expand);
 
   // These library functions default to expand.
-  for (MVT VT : {MVT::f32, MVT::f64, MVT::f128}) {
-    setOperationAction(ISD::FCBRT,      VT, Expand);
-    setOperationAction(ISD::FLOG ,      VT, Expand);
-    setOperationAction(ISD::FLOG2,      VT, Expand);
-    setOperationAction(ISD::FLOG10,     VT, Expand);
-    setOperationAction(ISD::FEXP ,      VT, Expand);
-    setOperationAction(ISD::FEXP2,      VT, Expand);
-    setOperationAction(ISD::FFLOOR,     VT, Expand);
-    setOperationAction(ISD::FNEARBYINT, VT, Expand);
-    setOperationAction(ISD::FCEIL,      VT, Expand);
-    setOperationAction(ISD::FRINT,      VT, Expand);
-    setOperationAction(ISD::FTRUNC,     VT, Expand);
-    setOperationAction(ISD::FROUND,     VT, Expand);
-    setOperationAction(ISD::FROUNDEVEN, VT, Expand);
-    setOperationAction(ISD::LROUND,     VT, Expand);
-    setOperationAction(ISD::LLROUND,    VT, Expand);
-    setOperationAction(ISD::LRINT,      VT, Expand);
-    setOperationAction(ISD::LLRINT,     VT, Expand);
-  }
+  setOperationAction({ISD::FCBRT, ISD::FLOG, ISD::FLOG2, ISD::FLOG10, ISD::FEXP,
+                      ISD::FEXP2, ISD::FFLOOR, ISD::FNEARBYINT, ISD::FCEIL,
+                      ISD::FRINT, ISD::FTRUNC, ISD::LROUND, ISD::LLROUND,
+                      ISD::LRINT, ISD::LLRINT},
+                     {MVT::f32, MVT::f64, MVT::f128}, Expand);
 
   // Default ISD::TRAP to expand (which turns it into abort).
   setOperationAction(ISD::TRAP, MVT::Other, Expand);
@@ -927,8 +881,15 @@ EVT TargetLoweringBase::getShiftAmountTy(EVT LHSTy, const DataLayout &DL,
   assert(LHSTy.isInteger() && "Shift amount is not an integer type!");
   if (LHSTy.isVector())
     return LHSTy;
-  return LegalTypes ? getScalarShiftAmountTy(DL, LHSTy)
-                    : getPointerTy(DL);
+  MVT ShiftVT =
+      LegalTypes ? getScalarShiftAmountTy(DL, LHSTy) : getPointerTy(DL);
+  // If any possible shift value won't fit in the prefered type, just use
+  // something safe. Assume it will be legalized when the shift is expanded.
+  if (ShiftVT.getSizeInBits() < Log2_32_Ceil(LHSTy.getSizeInBits()))
+    ShiftVT = MVT::i32;
+  assert(ShiftVT.getSizeInBits() >= Log2_32_Ceil(LHSTy.getSizeInBits()) &&
+         "ShiftVT is still too small!");
+  return ShiftVT;
 }
 
 bool TargetLoweringBase::canOpTrap(unsigned Op, EVT VT) const {
@@ -1182,7 +1143,7 @@ TargetLoweringBase::emitPatchPoint(MachineInstr &InitialMI,
   // all stack slots), but we need to handle the different type of stackmap
   // operands and memory effects here.
 
-  if (!llvm::any_of(MI->operands(),
+  if (llvm::none_of(MI->operands(),
                     [](MachineOperand &Operand) { return Operand.isFI(); }))
     return MBB;
 
@@ -1641,6 +1602,11 @@ bool TargetLoweringBase::isSuitableForJumpTable(const SwitchInst *SI,
          (NumCases * 100 >= Range * MinDensity);
 }
 
+MVT TargetLoweringBase::getPreferredSwitchConditionType(LLVMContext &Context,
+                                                        EVT ConditionVT) const {
+  return getRegisterType(Context, ConditionVT);
+}
+
 /// Get the EVTs and ArgFlags collections that represent the legalized return
 /// type of the given function.  This does not require a DAG or a return value,
 /// and is suitable for use before any DAGs for the function are constructed.
@@ -1697,7 +1663,7 @@ void llvm::GetReturnInfo(CallingConv::ID CC, Type *ReturnType,
 /// getByValTypeAlignment - Return the desired alignment for ByVal aggregate
 /// function arguments in the caller parameter area.  This is the actual
 /// alignment, not its logarithm.
-unsigned TargetLoweringBase::getByValTypeAlignment(Type *Ty,
+uint64_t TargetLoweringBase::getByValTypeAlignment(Type *Ty,
                                                    const DataLayout &DL) const {
   return DL.getABITypeAlign(Ty).value();
 }
@@ -1851,8 +1817,12 @@ TargetLoweringBase::getTypeLegalizationCost(const DataLayout &DL,
   while (true) {
     LegalizeKind LK = getTypeConversion(C, MTy);
 
-    if (LK.first == TypeScalarizeScalableVector)
-      return std::make_pair(InstructionCost::getInvalid(), MVT::getVT(Ty));
+    if (LK.first == TypeScalarizeScalableVector) {
+      // Ensure we return a sensible simple VT here, since many callers of this
+      // function require it.
+      MVT VT = MTy.isSimple() ? MTy.getSimpleVT() : MVT::i64;
+      return std::make_pair(InstructionCost::getInvalid(), VT);
+    }
 
     if (LK.first == TypeLegal)
       return std::make_pair(Cost, MTy.getSimpleVT());
@@ -1982,8 +1952,11 @@ void TargetLoweringBase::insertSSPDeclarations(Module &M) const {
     auto *GV = new GlobalVariable(M, Type::getInt8PtrTy(M.getContext()), false,
                                   GlobalVariable::ExternalLinkage, nullptr,
                                   "__stack_chk_guard");
+
+    // FreeBSD has "__stack_chk_guard" defined externally on libc.so
     if (TM.getRelocationModel() == Reloc::Static &&
-        !TM.getTargetTriple().isWindowsGNUEnvironment())
+        !TM.getTargetTriple().isWindowsGNUEnvironment() &&
+        !TM.getTargetTriple().isOSFreeBSD())
       GV->setDSOLocal(true);
   }
 }
@@ -2028,6 +2001,11 @@ Align TargetLoweringBase::getPrefLoopAlignment(MachineLoop *ML) const {
   return PrefLoopAlignment;
 }
 
+unsigned TargetLoweringBase::getMaxPermittedBytesForAlignment(
+    MachineBasicBlock *MBB) const {
+  return MaxBytesForAlignment;
+}
+
 //===----------------------------------------------------------------------===//
 //  Reciprocal Estimates
 //===----------------------------------------------------------------------===//
@@ -2048,9 +2026,11 @@ static std::string getReciprocalOpName(bool IsSqrt, EVT VT) {
 
   Name += IsSqrt ? "sqrt" : "div";
 
-  // TODO: Handle "half" or other float types?
+  // TODO: Handle other float types?
   if (VT.getScalarType() == MVT::f64) {
     Name += "d";
+  } else if (VT.getScalarType() == MVT::f16) {
+    Name += "h";
   } else {
     assert(VT.getScalarType() == MVT::f32 &&
            "Unexpected FP type for reciprocal estimate");

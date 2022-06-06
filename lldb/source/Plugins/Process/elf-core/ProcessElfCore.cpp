@@ -15,11 +15,13 @@
 #include "lldb/Core/ModuleSpec.h"
 #include "lldb/Core/PluginManager.h"
 #include "lldb/Core/Section.h"
+#include "lldb/Target/ABI.h"
 #include "lldb/Target/DynamicLoader.h"
 #include "lldb/Target/MemoryRegionInfo.h"
 #include "lldb/Target/Target.h"
 #include "lldb/Target/UnixSignals.h"
 #include "lldb/Utility/DataBufferHeap.h"
+#include "lldb/Utility/LLDBLog.h"
 #include "lldb/Utility/Log.h"
 #include "lldb/Utility/State.h"
 
@@ -37,12 +39,7 @@ namespace ELF = llvm::ELF;
 
 LLDB_PLUGIN_DEFINE(ProcessElfCore)
 
-ConstString ProcessElfCore::GetPluginNameStatic() {
-  static ConstString g_name("elf-core");
-  return g_name;
-}
-
-const char *ProcessElfCore::GetPluginDescriptionStatic() {
+llvm::StringRef ProcessElfCore::GetPluginDescriptionStatic() {
   return "ELF core dump plug-in.";
 }
 
@@ -69,6 +66,10 @@ lldb::ProcessSP ProcessElfCore::CreateInstance(lldb::TargetSP target_sp,
       DataExtractor data(data_sp, lldb::eByteOrderLittle, 4);
       lldb::offset_t data_offset = 0;
       if (elf_header.Parse(data, &data_offset)) {
+        // Check whether we're dealing with a raw FreeBSD "full memory dump"
+        // ELF vmcore that needs to be handled via FreeBSDKernel plugin instead.
+        if (elf_header.e_ident[7] == 0xFF && elf_header.e_version == 0)
+          return process_sp;
         if (elf_header.e_type == llvm::ELF::ET_CORE)
           process_sp = std::make_shared<ProcessElfCore>(target_sp, listener_sp,
                                                         *crash_file);
@@ -109,9 +110,6 @@ ProcessElfCore::~ProcessElfCore() {
   // destroy the broadcaster.
   Finalize();
 }
-
-// PluginInterface
-ConstString ProcessElfCore::GetPluginName() { return GetPluginNameStatic(); }
 
 lldb::addr_t ProcessElfCore::AddAddressRangeFromLoadSegment(
     const elf::ELFProgramHeader &header) {
@@ -255,7 +253,7 @@ Status ProcessElfCore::DoLoadCore() {
 lldb_private::DynamicLoader *ProcessElfCore::GetDynamicLoader() {
   if (m_dyld_up.get() == nullptr)
     m_dyld_up.reset(DynamicLoader::FindPlugin(
-        this, DynamicLoaderPOSIXDYLD::GetPluginNameStatic().GetCString()));
+        this, DynamicLoaderPOSIXDYLD::GetPluginNameStatic()));
   return m_dyld_up.get();
 }
 
@@ -284,13 +282,16 @@ bool ProcessElfCore::IsAlive() { return true; }
 // Process Memory
 size_t ProcessElfCore::ReadMemory(lldb::addr_t addr, void *buf, size_t size,
                                   Status &error) {
+  if (lldb::ABISP abi_sp = GetABI())
+    addr = abi_sp->FixAnyAddress(addr);
+
   // Don't allow the caching that lldb_private::Process::ReadMemory does since
   // in core files we have it all cached our our core file anyway.
   return DoReadMemory(addr, buf, size, error);
 }
 
-Status ProcessElfCore::GetMemoryRegionInfo(lldb::addr_t load_addr,
-                                           MemoryRegionInfo &region_info) {
+Status ProcessElfCore::DoGetMemoryRegionInfo(lldb::addr_t load_addr,
+                                             MemoryRegionInfo &region_info) {
   region_info.Clear();
   const VMRangeToPermissions::Entry *permission_entry =
       m_core_range_infos.FindEntryThatContainsOrFollows(load_addr);
@@ -406,7 +407,7 @@ static void ParseFreeBSDPrStatus(ThreadData &thread_data,
   lldb::offset_t offset = 0;
   int pr_version = data.GetU32(&offset);
 
-  Log *log(GetLogIfAllCategoriesSet(LIBLLDB_LOG_PROCESS));
+  Log *log = GetLog(LLDBLog::Process);
   if (log) {
     if (pr_version > 1)
       LLDB_LOGF(log, "FreeBSD PRSTATUS unexpected version %d", pr_version);
@@ -434,7 +435,7 @@ static void ParseFreeBSDPrPsInfo(ProcessElfCore &process,
   lldb::offset_t offset = 0;
   int pr_version = data.GetU32(&offset);
 
-  Log *log(GetLogIfAllCategoriesSet(LIBLLDB_LOG_PROCESS));
+  Log *log = GetLog(LLDBLog::Process);
   if (log) {
     if (pr_version > 1)
       LLDB_LOGF(log, "FreeBSD PRPSINFO unexpected version %d", pr_version);

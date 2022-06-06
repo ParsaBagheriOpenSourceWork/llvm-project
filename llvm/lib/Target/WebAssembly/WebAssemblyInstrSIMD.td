@@ -11,16 +11,33 @@
 ///
 //===----------------------------------------------------------------------===//
 
-// Instructions requiring HasSIMD128 and the simd128 prefix byte
-multiclass SIMD_I<dag oops_r, dag iops_r, dag oops_s, dag iops_s,
-                  list<dag> pattern_r, string asmstr_r = "",
-                  string asmstr_s = "", bits<32> simdop = -1> {
+// Instructions using the SIMD opcode prefix and requiring one of the SIMD
+// feature predicates.
+multiclass ABSTRACT_SIMD_I<dag oops_r, dag iops_r, dag oops_s, dag iops_s,
+                           list<dag> pattern_r, string asmstr_r,
+                           string asmstr_s, bits<32> simdop,
+                           Predicate simd_level> {
   defm "" : I<oops_r, iops_r, oops_s, iops_s, pattern_r, asmstr_r, asmstr_s,
               !if(!ge(simdop, 0x100),
                   !or(0xfd0000, !and(0xffff, simdop)),
                   !or(0xfd00, !and(0xff, simdop)))>,
-            Requires<[HasSIMD128]>;
+            Requires<[simd_level]>;
 }
+
+multiclass SIMD_I<dag oops_r, dag iops_r, dag oops_s, dag iops_s,
+                  list<dag> pattern_r, string asmstr_r = "",
+                  string asmstr_s = "", bits<32> simdop = -1> {
+  defm "" : ABSTRACT_SIMD_I<oops_r, iops_r, oops_s, iops_s, pattern_r, asmstr_r,
+                            asmstr_s, simdop, HasSIMD128>;
+}
+
+multiclass RELAXED_I<dag oops_r, dag iops_r, dag oops_s, dag iops_s,
+                     list<dag> pattern_r, string asmstr_r = "",
+                     string asmstr_s = "", bits<32> simdop = -1> {
+  defm "" : ABSTRACT_SIMD_I<oops_r, iops_r, oops_s, iops_s, pattern_r, asmstr_r,
+                            asmstr_s, simdop, HasRelaxedSIMD>;
+}
+
 
 defm "" : ARGUMENT<V128, v16i8>;
 defm "" : ARGUMENT<V128, v8i16>;
@@ -1212,9 +1229,9 @@ def trunc_sat_zero_s :
   SDNode<"WebAssemblyISD::TRUNC_SAT_ZERO_S", trunc_sat_zero_t>;
 def trunc_sat_zero_u :
   SDNode<"WebAssemblyISD::TRUNC_SAT_ZERO_U", trunc_sat_zero_t>;
-defm "" : SIMDConvert<I32x4, F64x2, trunc_sat_zero_s, "trunc_sat_zero_f64x2_s",
+defm "" : SIMDConvert<I32x4, F64x2, trunc_sat_zero_s, "trunc_sat_f64x2_s_zero",
                       0xfc>;
-defm "" : SIMDConvert<I32x4, F64x2, trunc_sat_zero_u, "trunc_sat_zero_f64x2_u",
+defm "" : SIMDConvert<I32x4, F64x2, trunc_sat_zero_u, "trunc_sat_f64x2_u_zero",
                       0xfd>;
 
 // Integer to floating point: convert
@@ -1261,6 +1278,14 @@ multiclass SIMDNarrow<Vec vec, bits<32> baseInst> {
 defm "" : SIMDNarrow<I16x8, 101>;
 defm "" : SIMDNarrow<I32x4, 133>;
 
+// WebAssemblyISD::NARROW_U
+def wasm_narrow_t : SDTypeProfile<1, 2, []>;
+def wasm_narrow_u : SDNode<"WebAssemblyISD::NARROW_U", wasm_narrow_t>;
+def : Pat<(v16i8 (wasm_narrow_u (v8i16 V128:$left), (v8i16 V128:$right))),
+          (NARROW_U_I8x16 $left, $right)>;
+def : Pat<(v8i16 (wasm_narrow_u (v4i32 V128:$left), (v4i32 V128:$right))),
+          (NARROW_U_I16x8 $left, $right)>;
+
 // Bitcasts are nops
 // Matching bitcast t1 to t1 causes strange errors, so avoid repeating types
 foreach t1 = AllVecs in
@@ -1282,7 +1307,7 @@ defm "" : SIMDConvert<I32x4, I16x8, int_wasm_extadd_pairwise_unsigned,
 def demote_t : SDTypeProfile<1, 1, [SDTCisVec<0>, SDTCisVec<1>]>;
 def demote_zero : SDNode<"WebAssemblyISD::DEMOTE_ZERO", demote_t>;
 defm "" : SIMDConvert<F32x4, F64x2, demote_zero,
-                      "demote_zero_f64x2", 0x5e>;
+                      "demote_f64x2_zero", 0x5e>;
 
 def promote_t : SDTypeProfile<1, 1, [SDTCisVec<0>, SDTCisVec<1>]>;
 def promote_low : SDNode<"WebAssemblyISD::PROMOTE_LOW", promote_t>;
@@ -1307,3 +1332,94 @@ def : Pat<(v2f64 (extloadv2f32 (i64 I64:$addr))),
 
 defm Q15MULR_SAT_S :
   SIMDBinary<I16x8, int_wasm_q15mulr_sat_signed, "q15mulr_sat_s", 0x82>;
+
+//===----------------------------------------------------------------------===//
+// Relaxed swizzle
+//===----------------------------------------------------------------------===//
+
+defm RELAXED_SWIZZLE :
+  RELAXED_I<(outs V128:$dst), (ins V128:$src, V128:$mask), (outs), (ins),
+         [(set (v16i8 V128:$dst),
+           (int_wasm_relaxed_swizzle (v16i8 V128:$src), (v16i8 V128:$mask)))],
+         "i8x16.relaxed_swizzle\t$dst, $src, $mask", "i8x16.relaxed_swizzle", 0x100>;
+
+//===----------------------------------------------------------------------===//
+// Relaxed floating-point to int conversions
+//===----------------------------------------------------------------------===//
+
+multiclass SIMD_RELAXED_CONVERT<Vec vec, Vec arg, SDPatternOperator op, string name, bits<32> simdop> {
+  defm op#_#vec :
+    RELAXED_I<(outs V128:$dst), (ins V128:$vec), (outs), (ins),
+              [(set (vec.vt V128:$dst), (vec.vt (op (arg.vt V128:$vec))))],
+              vec.prefix#"."#name#"\t$dst, $vec", vec.prefix#"."#name, simdop>;
+}
+
+defm "" : SIMD_RELAXED_CONVERT<I32x4, F32x4, int_wasm_relaxed_trunc_signed,
+                               "relaxed_trunc_f32x4_s", 0x101>;
+defm "" : SIMD_RELAXED_CONVERT<I32x4, F32x4, int_wasm_relaxed_trunc_unsigned,
+                               "relaxed_trunc_f32x4_u", 0x102>;
+defm "" : SIMD_RELAXED_CONVERT<I32x4, F64x2, int_wasm_relaxed_trunc_signed_zero,
+                               "relaxed_trunc_f64x2_s_zero", 0x103>;
+defm "" : SIMD_RELAXED_CONVERT<I32x4, F64x2, int_wasm_relaxed_trunc_unsigned_zero,
+                               "relaxed_trunc_f64x2_u_zero", 0x104>;
+
+//===----------------------------------------------------------------------===//
+// Relaxed Fused Multiply- Add and Subtract (FMA/FMS)
+//===----------------------------------------------------------------------===//
+
+multiclass SIMDFM<Vec vec, bits<32> simdopA, bits<32> simdopS> {
+  defm FMA_#vec :
+    RELAXED_I<(outs V128:$dst), (ins V128:$a, V128:$b, V128:$c), (outs), (ins),
+              [(set (vec.vt V128:$dst), (int_wasm_fma
+                (vec.vt V128:$a), (vec.vt V128:$b), (vec.vt V128:$c)))],
+              vec.prefix#".relaxed_fma\t$dst, $a, $b, $c",
+              vec.prefix#".relaxed_fma", simdopA>;
+  defm FMS_#vec :
+    RELAXED_I<(outs V128:$dst), (ins V128:$a, V128:$b, V128:$c), (outs), (ins),
+              [(set (vec.vt V128:$dst), (int_wasm_fms
+                (vec.vt V128:$a), (vec.vt V128:$b), (vec.vt V128:$c)))],
+              vec.prefix#".relaxed_fms\t$dst, $a, $b, $c",
+              vec.prefix#".relaxed_fms", simdopS>;
+}
+
+defm "" : SIMDFM<F32x4, 0x105, 0x106>;
+defm "" : SIMDFM<F64x2, 0x107, 0x108>;
+
+//===----------------------------------------------------------------------===//
+// Laneselect
+//===----------------------------------------------------------------------===//
+
+multiclass SIMDLANESELECT<Vec vec, bits<32> op> {
+  defm LANESELECT_#vec :
+    RELAXED_I<(outs V128:$dst), (ins V128:$a, V128:$b, V128:$c), (outs), (ins),
+              [(set (vec.vt V128:$dst), (int_wasm_laneselect
+                (vec.vt V128:$a), (vec.vt V128:$b), (vec.vt V128:$c)))],
+              vec.prefix#".relaxed_laneselect\t$dst, $a, $b, $c",
+              vec.prefix#".relaxed_laneselect", op>;
+}
+
+defm "" : SIMDLANESELECT<I8x16, 0x109>;
+defm "" : SIMDLANESELECT<I16x8, 0x10a>;
+defm "" : SIMDLANESELECT<I32x4, 0x10b>;
+defm "" : SIMDLANESELECT<I64x2, 0x10c>;
+
+
+//===----------------------------------------------------------------------===//
+// Relaxed floating-point min and max.
+//===----------------------------------------------------------------------===//
+
+multiclass SIMD_RELAXED_FMINMAX<Vec vec, bits<32> simdopMin, bits<32> simdopMax> {
+  defm RELAXED_FMIN_#vec :
+    RELAXED_I<(outs V128:$dst), (ins V128:$a, V128:$b), (outs), (ins),
+              [(set (vec.vt V128:$dst), (int_wasm_relaxed_min
+                (vec.vt V128:$a), (vec.vt V128:$b)))],
+              vec.prefix#".relaxed_min\t$dst, $a, $b", vec.prefix#".relaxed_min", simdopMin>;
+  defm RELAXED_FMAX_#vec :
+    RELAXED_I<(outs V128:$dst), (ins V128:$a, V128:$b), (outs), (ins),
+              [(set (vec.vt V128:$dst), (int_wasm_relaxed_max
+                (vec.vt V128:$a), (vec.vt V128:$b)))],
+              vec.prefix#".relaxed_max\t$dst, $a, $b", vec.prefix#".relaxed_max", simdopMax>;
+}
+
+defm "" : SIMD_RELAXED_FMINMAX<F32x4, 0x10d, 0x10e>;
+defm "" : SIMD_RELAXED_FMINMAX<F64x2, 0x10f, 0x110>;

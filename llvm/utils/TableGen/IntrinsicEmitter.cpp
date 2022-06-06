@@ -18,7 +18,6 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/TableGen/Error.h"
 #include "llvm/TableGen/Record.h"
-#include "llvm/TableGen/StringMatcher.h"
 #include "llvm/TableGen/StringToOffsetTable.h"
 #include "llvm/TableGen/TableGenBackend.h"
 #include <algorithm>
@@ -249,7 +248,12 @@ enum IIT_Info {
   IIT_BF16 = 48,
   IIT_STRUCT9 = 49,
   IIT_V256 = 50,
-  IIT_AMX  = 51
+  IIT_AMX  = 51,
+  IIT_PPCF128 = 52,
+  IIT_V3 = 53,
+  IIT_EXTERNREF = 54,
+  IIT_FUNCREF = 55,
+  IIT_ANYPTR_TO_ELT = 56,
 };
 
 static void EncodeFixedValueType(MVT::SimpleValueType VT,
@@ -274,6 +278,7 @@ static void EncodeFixedValueType(MVT::SimpleValueType VT,
   case MVT::f32: return Sig.push_back(IIT_F32);
   case MVT::f64: return Sig.push_back(IIT_F64);
   case MVT::f128: return Sig.push_back(IIT_F128);
+  case MVT::ppcf128: return Sig.push_back(IIT_PPCF128);
   case MVT::token: return Sig.push_back(IIT_TOKEN);
   case MVT::Metadata: return Sig.push_back(IIT_METADATA);
   case MVT::x86mmx: return Sig.push_back(IIT_MMX);
@@ -282,6 +287,10 @@ static void EncodeFixedValueType(MVT::SimpleValueType VT,
   case MVT::Other: return Sig.push_back(IIT_EMPTYSTRUCT);
   // MVT::isVoid is used to represent varargs here.
   case MVT::isVoid: return Sig.push_back(IIT_VARARG);
+  case MVT::externref:
+    return Sig.push_back(IIT_EXTERNREF);
+  case MVT::funcref:
+    return Sig.push_back(IIT_FUNCREF);
   }
 }
 
@@ -314,6 +323,13 @@ static void EncodeFixedType(Record *R, std::vector<unsigned char> &ArgCodes,
       Sig.push_back(IIT_PTR_TO_ARG);
     else if (R->isSubClassOf("LLVMVectorOfAnyPointersToElt")) {
       Sig.push_back(IIT_VEC_OF_ANYPTRS_TO_ELT);
+      // Encode overloaded ArgNo
+      Sig.push_back(NextArgCode++);
+      // Encode LLVMMatchType<Number> ArgNo
+      Sig.push_back(Number);
+      return;
+    } else if (R->isSubClassOf("LLVMAnyPointerToElt")) {
+      Sig.push_back(IIT_ANYPTR_TO_ELT);
       // Encode overloaded ArgNo
       Sig.push_back(NextArgCode++);
       // Encode LLVMMatchType<Number> ArgNo
@@ -382,6 +398,7 @@ static void EncodeFixedType(Record *R, std::vector<unsigned char> &ArgCodes,
     default: PrintFatalError("unhandled vector type width in intrinsic!");
     case 1: Sig.push_back(IIT_V1); break;
     case 2: Sig.push_back(IIT_V2); break;
+    case 3: Sig.push_back(IIT_V3); break;
     case 4: Sig.push_back(IIT_V4); break;
     case 8: Sig.push_back(IIT_V8); break;
     case 16: Sig.push_back(IIT_V16); break;
@@ -405,6 +422,9 @@ static void UpdateArgCodes(Record *R, std::vector<unsigned char> &ArgCodes,
   if (R->isSubClassOf("LLVMMatchType")) {
     if (R->isSubClassOf("LLVMVectorOfAnyPointersToElt")) {
       ArgCodes.push_back(3 /*vAny*/);
+      ++NumInserted;
+    } else if (R->isSubClassOf("LLVMAnyPointerToElt")) {
+      ArgCodes.push_back(4 /*iPTRAny*/);
       ++NumInserted;
     }
     return;
@@ -590,6 +610,9 @@ struct AttributeComparator {
     if (L->isNoReturn != R->isNoReturn)
       return R->isNoReturn;
 
+    if (L->isNoCallback != R->isNoCallback)
+      return R->isNoCallback;
+
     if (L->isNoSync != R->isNoSync)
       return R->isNoSync;
 
@@ -739,16 +762,18 @@ void IntrinsicEmitter::EmitAttributes(const CodeGenIntrinsicTable &Ints,
     if (!Intrinsic.canThrow ||
         (Intrinsic.ModRef != CodeGenIntrinsic::ReadWriteMem &&
          !Intrinsic.hasSideEffects) ||
-        Intrinsic.isNoReturn || Intrinsic.isNoSync || Intrinsic.isNoFree ||
-        Intrinsic.isWillReturn || Intrinsic.isCold || Intrinsic.isNoDuplicate ||
-        Intrinsic.isNoMerge || Intrinsic.isConvergent ||
-        Intrinsic.isSpeculatable) {
+        Intrinsic.isNoReturn || Intrinsic.isNoCallback || Intrinsic.isNoSync ||
+        Intrinsic.isNoFree || Intrinsic.isWillReturn || Intrinsic.isCold ||
+        Intrinsic.isNoDuplicate || Intrinsic.isNoMerge ||
+        Intrinsic.isConvergent || Intrinsic.isSpeculatable) {
       OS << "      const Attribute::AttrKind Atts[] = {";
       ListSeparator LS(",");
       if (!Intrinsic.canThrow)
         OS << LS << "Attribute::NoUnwind";
       if (Intrinsic.isNoReturn)
         OS << LS << "Attribute::NoReturn";
+      if (Intrinsic.isNoCallback)
+        OS << LS << "Attribute::NoCallback";
       if (Intrinsic.isNoSync)
         OS << LS << "Attribute::NoSync";
       if (Intrinsic.isNoFree)

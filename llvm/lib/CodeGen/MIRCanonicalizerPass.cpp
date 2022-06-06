@@ -27,20 +27,13 @@
 #include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
-#include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
-#include "llvm/CodeGen/Passes.h"
 #include "llvm/InitializePasses.h"
+#include "llvm/Pass.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
-#include <queue>
-
 using namespace llvm;
-
-namespace llvm {
-extern char &MIRCanonicalizerID;
-} // namespace llvm
 
 #define DEBUG_TYPE "mir-canonicalizer"
 
@@ -332,8 +325,8 @@ static bool propagateLocalCopies(MachineBasicBlock *MBB) {
       continue;
 
     std::vector<MachineOperand *> Uses;
-    for (auto UI = MRI.use_begin(Dst); UI != MRI.use_end(); ++UI)
-      Uses.push_back(&*UI);
+    for (MachineOperand &MO : MRI.use_operands(Dst))
+      Uses.push_back(&MO);
     for (auto *MO : Uses)
       MO->setReg(Src);
 

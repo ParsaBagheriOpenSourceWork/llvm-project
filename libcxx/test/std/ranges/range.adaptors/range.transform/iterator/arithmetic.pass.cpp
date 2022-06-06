@@ -7,7 +7,6 @@
 //===----------------------------------------------------------------------===//
 
 // UNSUPPORTED: c++03, c++11, c++14, c++17
-// UNSUPPORTED: libcpp-no-concepts
 // UNSUPPORTED: libcpp-has-no-incomplete-ranges
 
 // transform_view::<iterator>::operator{++,--,+=,-=}
@@ -18,7 +17,7 @@
 #include "../types.h"
 
 constexpr bool test() {
-  std::ranges::transform_view<ContiguousView, PlusOne> transformView;
+  std::ranges::transform_view<MoveOnlyView, PlusOne> transformView;
   auto iter = std::move(transformView).begin();
   assert((++iter).base() == globalBuff + 1);
 

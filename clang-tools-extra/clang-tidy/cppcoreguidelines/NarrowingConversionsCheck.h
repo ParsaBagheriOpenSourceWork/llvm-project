@@ -98,10 +98,11 @@ private:
                                           const BuiltinType &ToType) const;
 
   const bool WarnOnIntegerNarrowingConversion;
+  const bool WarnOnIntegerToFloatingPointNarrowingConversion;
   const bool WarnOnFloatingPointNarrowingConversion;
   const bool WarnWithinTemplateInstantiation;
   const bool WarnOnEquivalentBitWidth;
-  const std::string IgnoreConversionFromTypes;
+  const StringRef IgnoreConversionFromTypes;
   const bool PedanticMode;
 };
 

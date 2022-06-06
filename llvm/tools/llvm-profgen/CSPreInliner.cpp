@@ -10,6 +10,7 @@
 #include "ProfiledBinary.h"
 #include "llvm/ADT/SCCIterator.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/DebugInfo/Symbolize/SymbolizableModule.h"
 #include <cstdint>
 #include <queue>
 
@@ -38,9 +39,10 @@ extern cl::opt<int> SampleColdCallSiteThreshold;
 extern cl::opt<int> ProfileInlineGrowthLimit;
 extern cl::opt<int> ProfileInlineLimitMin;
 extern cl::opt<int> ProfileInlineLimitMax;
+extern cl::opt<bool> SortProfiledSCC;
 
 cl::opt<bool> EnableCSPreInliner(
-    "csspgo-preinliner", cl::Hidden, cl::init(false),
+    "csspgo-preinliner", cl::Hidden, cl::init(true),
     cl::desc("Run a global pre-inliner to merge context profile based on "
              "estimated global top-down inline decisions"));
 
@@ -54,13 +56,20 @@ static cl::opt<bool> SamplePreInlineReplay(
         "Replay previous inlining and adjust context profile accordingly"));
 
 CSPreInliner::CSPreInliner(SampleProfileMap &Profiles, ProfiledBinary &Binary,
-                           uint64_t HotThreshold, uint64_t ColdThreshold)
+                           ProfileSummary *Summary)
     : UseContextCost(UseContextCostForPreInliner),
       // TODO: Pass in a guid-to-name map in order for
       // ContextTracker.getFuncNameFor to work, if `Profiles` can have md5 codes
       // as their profile context.
       ContextTracker(Profiles, nullptr), ProfileMap(Profiles), Binary(Binary),
-      HotCountThreshold(HotThreshold), ColdCountThreshold(ColdThreshold) {}
+      Summary(Summary) {
+  // Set default preinliner hot/cold call site threshold tuned with CSSPGO.
+  // for good performance with reasonable profile size.
+  if (!SampleHotCallSiteThreshold.getNumOccurrences())
+    SampleHotCallSiteThreshold = 1500;
+  if (!SampleColdCallSiteThreshold.getNumOccurrences())
+    SampleColdCallSiteThreshold = 0;
+}
 
 std::vector<StringRef> CSPreInliner::buildTopDownOrder() {
   std::vector<StringRef> Order;
@@ -70,7 +79,13 @@ std::vector<StringRef> CSPreInliner::buildTopDownOrder() {
   // by building up SCC and reversing SCC order.
   scc_iterator<ProfiledCallGraph *> I = scc_begin(&ProfiledCG);
   while (!I.isAtEnd()) {
-    for (ProfiledCallGraphNode *Node : *I) {
+    auto Range = *I;
+    if (SortProfiledSCC) {
+      // Sort nodes in one SCC based on callsite hotness.
+      scc_member_iterator<ProfiledCallGraph *> SI(*I);
+      Range = *SI;
+    }
+    for (auto *Node : Range) {
       if (Node != ProfiledCG.getEntryNode())
         Order.push_back(Node->Name);
     }
@@ -137,16 +152,32 @@ bool CSPreInliner::shouldInline(ProfiledInlineCandidate &Candidate) {
     return Candidate.CalleeSamples->getContext().hasAttribute(
         ContextWasInlined);
 
-  // Adjust threshold based on call site hotness, only do this for callsite
-  // prioritized inliner because otherwise cost-benefit check is done earlier.
   unsigned int SampleThreshold = SampleColdCallSiteThreshold;
-  if (Candidate.CallsiteCount > HotCountThreshold)
-    SampleThreshold = SampleHotCallSiteThreshold;
+  uint64_t ColdCountThreshold = ProfileSummaryBuilder::getColdCountThreshold(
+      (Summary->getDetailedSummary()));
 
-  // TODO: for small cold functions, we may inlined them and we need to keep
-  // context profile accordingly.
-  if (Candidate.CallsiteCount < ColdCountThreshold)
+  if (Candidate.CallsiteCount <= ColdCountThreshold)
     SampleThreshold = SampleColdCallSiteThreshold;
+  else {
+    // Linearly adjust threshold based on normalized hotness, i.e, a value in
+    // [0,1]. Use 10% cutoff instead of the max count as the normalization
+    // upperbound for stability.
+    double NormalizationUpperBound =
+        ProfileSummaryBuilder::getEntryForPercentile(
+            Summary->getDetailedSummary(), 100000 /* 10% */)
+            .MinCount;
+    double NormalizationLowerBound = ColdCountThreshold;
+    double NormalizedHotness =
+        (Candidate.CallsiteCount - NormalizationLowerBound) /
+        (NormalizationUpperBound - NormalizationLowerBound);
+    if (NormalizedHotness > 1.0)
+      NormalizedHotness = 1.0;
+    // Add 1 to to ensure hot callsites get a non-zero threshold, which could
+    // happen when SampleColdCallSiteThreshold is 0. This is when we do not
+    // want any inlining for cold callsites.
+    SampleThreshold = SampleHotCallSiteThreshold * NormalizedHotness * 100 +
+                      SampleColdCallSiteThreshold + 1;
+  }
 
   return (Candidate.SizeCost < SampleThreshold);
 }
@@ -252,7 +283,7 @@ void CSPreInliner::run() {
   // trim out such profiles from the output.
   std::vector<SampleContext> ProfilesToBeRemoved;
   for (auto &It : ProfileMap) {
-    SampleContext Context = It.second.getContext();
+    SampleContext &Context = It.second.getContext();
     if (!Context.isBaseContext() && !Context.hasState(InlinedContext)) {
       assert(Context.hasState(MergedContext) &&
              "Not inlined context profile should be merged already");
@@ -266,6 +297,8 @@ void CSPreInliner::run() {
 
   // Make sure ProfileMap's key is consistent with FunctionSamples' name.
   SampleContextTrimmer(ProfileMap).canonicalizeContextProfiles();
+
+  FunctionSamples::ProfileIsPreInlined = true;
 
   LLVM_DEBUG(printProfileNames(ProfileMap, false));
 }

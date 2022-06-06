@@ -32,13 +32,13 @@ public:
   void check(const ast_matchers::MatchFinder::MatchResult &Result) override;
 
 private:
-  const std::string MemSetNames;
-  const std::string MemCpyNames;
-  const std::string MemCmpNames;
+  const StringRef MemSetNames;
+  const StringRef MemCpyNames;
+  const StringRef MemCmpNames;
 };
 
 } // namespace cert
 } // namespace tidy
 } // namespace clang
 
-#endif // LLVM_CLANG_TOOLS_EXTRA_CLANG_TIDY_CERT_NOTTRIVIALTYPESLIBCMEMORYCALLSCHECK_H
+#endif // LLVM_CLANG_TOOLS_EXTRA_CLANG_TIDY_CERT_NONTRIVIALTYPESLIBCMEMORYCALLSCHECK_H

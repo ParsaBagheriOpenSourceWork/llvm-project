@@ -53,6 +53,9 @@ private:
                                    uint64_t Offset, Align Alignment,
                                    bool Signed,
                                    const ISD::InputArg *Arg = nullptr) const;
+  SDValue loadImplicitKernelArgument(SelectionDAG &DAG, MVT VT, const SDLoc &DL,
+                                     Align Alignment,
+                                     ImplicitParameter Param) const;
 
   SDValue lowerStackParameter(SelectionDAG &DAG, CCValAssign &VA,
                               const SDLoc &SL, SDValue Chain,
@@ -75,6 +78,9 @@ private:
                                      unsigned NewOpcode) const;
   SDValue lowerStructBufferAtomicIntrin(SDValue Op, SelectionDAG &DAG,
                                         unsigned NewOpcode) const;
+
+  SDValue lowerWorkitemID(SelectionDAG &DAG, SDValue Op, unsigned Dim,
+                          const ArgDescriptor &ArgDesc) const;
 
   SDValue LowerINTRINSIC_WO_CHAIN(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerINTRINSIC_W_CHAIN(SDValue Op, SelectionDAG &DAG) const;
@@ -135,6 +141,7 @@ private:
   SDValue lowerFP_ROUND(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerFMINNUM_FMAXNUM(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerXMULO(SDValue Op, SelectionDAG &DAG) const;
+  SDValue lowerXMUL_LOHI(SDValue Op, SelectionDAG &DAG) const;
 
   SDValue getSegmentAperture(unsigned AS, const SDLoc &DL,
                              SelectionDAG &DAG) const;
@@ -144,6 +151,7 @@ private:
   SDValue lowerINSERT_VECTOR_ELT(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerEXTRACT_VECTOR_ELT(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerVECTOR_SHUFFLE(SDValue Op, SelectionDAG &DAG) const;
+  SDValue lowerSCALAR_TO_VECTOR(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerBUILD_VECTOR(SDValue Op, SelectionDAG &DAG) const;
 
   SDValue lowerTRAP(SDValue Op, SelectionDAG &DAG) const;
@@ -190,6 +198,7 @@ private:
   SDValue reassociateScalarOps(SDNode *N, SelectionDAG &DAG) const;
   unsigned getFusedOpcode(const SelectionDAG &DAG,
                           const SDNode *N0, const SDNode *N1) const;
+  SDValue tryFoldToMad64_32(SDNode *N, DAGCombinerInfo &DCI) const;
   SDValue performAddCombine(SDNode *N, DAGCombinerInfo &DCI) const;
   SDValue performAddCarrySubCarryCombine(SDNode *N, DAGCombinerInfo &DCI) const;
   SDValue performSubCombine(SDNode *N, DAGCombinerInfo &DCI) const;
@@ -251,6 +260,9 @@ public:
 
   bool isFPExtFoldable(const SelectionDAG &DAG, unsigned Opcode, EVT DestVT,
                        EVT SrcVT) const override;
+
+  bool isFPExtFoldable(const MachineInstr &MI, unsigned Opcode, LLT DestTy,
+                       LLT SrcTy) const override;
 
   bool isShuffleMaskLegal(ArrayRef<int> /*Mask*/, EVT /*VT*/) const override;
 
@@ -377,6 +389,7 @@ public:
 
   bool hasBitPreservingFPLogic(EVT VT) const override;
   bool enableAggressiveFMAFusion(EVT VT) const override;
+  bool enableAggressiveFMAFusion(LLT Ty) const override;
   EVT getSetCCResultType(const DataLayout &DL, LLVMContext &Context,
                          EVT VT) const override;
   MVT getScalarShiftAmountTy(const DataLayout &, EVT) const override;
@@ -384,7 +397,10 @@ public:
 
   bool isFMAFasterThanFMulAndFAdd(const MachineFunction &MF,
                                   EVT VT) const override;
+  bool isFMAFasterThanFMulAndFAdd(const MachineFunction &MF,
+                                  const LLT Ty) const override;
   bool isFMADLegal(const SelectionDAG &DAG, const SDNode *N) const override;
+  bool isFMADLegal(const MachineInstr &MI, const LLT Ty) const override;
 
   SDValue splitUnaryVectorOp(SDValue Op, SelectionDAG &DAG) const;
   SDValue splitBinaryVectorOp(SDValue Op, SelectionDAG &DAG) const;
@@ -441,6 +457,11 @@ public:
   bool isSDNodeSourceOfDivergence(const SDNode *N,
     FunctionLoweringInfo *FLI, LegacyDivergenceAnalysis *DA) const override;
 
+  bool hasMemSDNodeUser(SDNode *N) const;
+
+  bool isReassocProfitable(SelectionDAG &DAG, SDValue N0,
+                           SDValue N1) const override;
+
   bool isCanonicalized(SelectionDAG &DAG, SDValue Op,
                        unsigned MaxDepth = 5) const;
   bool isCanonicalized(Register Reg, MachineFunction &MF,
@@ -453,6 +474,10 @@ public:
                                     bool SNaN = false,
                                     unsigned Depth = 0) const override;
   AtomicExpansionKind shouldExpandAtomicRMWInIR(AtomicRMWInst *) const override;
+  AtomicExpansionKind shouldExpandAtomicLoadInIR(LoadInst *LI) const override;
+  AtomicExpansionKind shouldExpandAtomicStoreInIR(StoreInst *SI) const override;
+  AtomicExpansionKind
+  shouldExpandAtomicCmpXchgInIR(AtomicCmpXchgInst *AI) const override;
 
   virtual const TargetRegisterClass *
   getRegClassFor(MVT VT, bool isDivergent) const override;
@@ -492,6 +517,9 @@ public:
 
   std::pair<InstructionCost, MVT> getTypeLegalizationCost(const DataLayout &DL,
                                                           Type *Ty) const;
+
+  MachineMemOperand::Flags
+  getTargetMMOFlags(const Instruction &I) const override;
 };
 
 } // End namespace llvm

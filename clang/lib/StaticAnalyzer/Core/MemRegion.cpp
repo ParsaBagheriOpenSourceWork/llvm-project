@@ -444,7 +444,7 @@ std::string MemRegion::getString() const {
   std::string s;
   llvm::raw_string_ostream os(s);
   dumpToStream(os);
-  return os.str();
+  return s;
 }
 
 void MemRegion::dumpToStream(raw_ostream &os) const {
@@ -480,7 +480,7 @@ void CompoundLiteralRegion::dumpToStream(raw_ostream &os) const {
 }
 
 void CXXTempObjectRegion::dumpToStream(raw_ostream &os) const {
-  os << "temp_object{" << getValueType().getAsString() << ", "
+  os << "temp_object{" << getValueType() << ", "
      << "S" << Ex->getID(getContext()) << '}';
 }
 
@@ -497,8 +497,8 @@ void CXXThisRegion::dumpToStream(raw_ostream &os) const {
 }
 
 void ElementRegion::dumpToStream(raw_ostream &os) const {
-  os << "Element{" << superRegion << ','
-     << Index << ',' << getElementType().getAsString() << '}';
+  os << "Element{" << superRegion << ',' << Index << ',' << getElementType()
+     << '}';
 }
 
 void FieldRegion::dumpToStream(raw_ostream &os) const {
@@ -794,7 +794,7 @@ DefinedOrUnknownSVal MemRegionManager::getStaticSize(const MemRegion *MR,
 
         const AnalyzerOptions &Opts = SVB.getAnalyzerOptions();
         if (Opts.ShouldConsiderSingleElementArraysAsFlexibleArrayMembers &&
-            Size.isOneValue())
+            Size.isOne())
           return true;
       }
       return false;
@@ -974,9 +974,9 @@ const VarRegion *MemRegionManager::getVarRegion(const VarDecl *D,
 
     // First handle the globals defined in system headers.
     if (Ctx.getSourceManager().isInSystemHeader(D->getLocation())) {
-      // Whitelist the system globals which often DO GET modified, assume the
+      //  Allow the system globals which often DO GET modified, assume the
       // rest are immutable.
-      if (D->getName().find("errno") != StringRef::npos)
+      if (D->getName().contains("errno"))
         sReg = getGlobalsRegion(MemRegion::GlobalSystemSpaceRegionKind);
       else
         sReg = getGlobalsRegion(MemRegion::GlobalImmutableSpaceRegionKind);
@@ -1012,14 +1012,15 @@ const VarRegion *MemRegionManager::getVarRegion(const VarDecl *D,
       sReg = getUnknownRegion();
     } else {
       if (D->hasLocalStorage()) {
-        sReg = isa<ParmVarDecl>(D) || isa<ImplicitParamDecl>(D)
-               ? static_cast<const MemRegion*>(getStackArgumentsRegion(STC))
-               : static_cast<const MemRegion*>(getStackLocalsRegion(STC));
+        sReg =
+            isa<ParmVarDecl, ImplicitParamDecl>(D)
+                ? static_cast<const MemRegion *>(getStackArgumentsRegion(STC))
+                : static_cast<const MemRegion *>(getStackLocalsRegion(STC));
       }
       else {
         assert(D->isStaticLocal());
         const Decl *STCD = STC->getDecl();
-        if (isa<FunctionDecl>(STCD) || isa<ObjCMethodDecl>(STCD))
+        if (isa<FunctionDecl, ObjCMethodDecl>(STCD))
           sReg = getGlobalsRegion(MemRegion::StaticGlobalSpaceRegionKind,
                                   getFunctionCodeRegion(cast<NamedDecl>(STCD)));
         else if (const auto *BD = dyn_cast<BlockDecl>(STCD)) {
@@ -1032,8 +1033,10 @@ const VarRegion *MemRegionManager::getVarRegion(const VarDecl *D,
             T = TSI->getType();
           if (T.isNull())
             T = getContext().VoidTy;
-          if (!T->getAs<FunctionType>())
-            T = getContext().getFunctionNoProtoType(T);
+          if (!T->getAs<FunctionType>()) {
+            FunctionProtoType::ExtProtoInfo Ext;
+            T = getContext().getFunctionType(T, None, Ext);
+          }
           T = getContext().getBlockPointerType(T);
 
           const BlockCodeRegion *BTR =
@@ -1152,9 +1155,12 @@ MemRegionManager::getBlockCodeRegion(const BlockDecl *BD, CanQualType locTy,
   return getSubRegion<BlockCodeRegion>(BD, locTy, AC, getCodeRegion());
 }
 
-/// getSymbolicRegion - Retrieve or create a "symbolic" memory region.
-const SymbolicRegion *MemRegionManager::getSymbolicRegion(SymbolRef sym) {
-  return getSubRegion<SymbolicRegion>(sym, getUnknownRegion());
+const SymbolicRegion *
+MemRegionManager::getSymbolicRegion(SymbolRef sym,
+                                    const MemSpaceRegion *MemSpace) {
+  if (MemSpace == nullptr)
+    MemSpace = getUnknownRegion();
+  return getSubRegion<SymbolicRegion>(sym, MemSpace);
 }
 
 const SymbolicRegion *MemRegionManager::getSymbolicHeapRegion(SymbolRef Sym) {
@@ -1283,9 +1289,7 @@ bool MemRegion::hasStackParametersStorage() const {
 }
 
 bool MemRegion::hasGlobalsOrParametersStorage() const {
-  const MemSpaceRegion *MS = getMemorySpace();
-  return isa<StackArgumentsSpaceRegion>(MS) ||
-         isa<GlobalsSpaceRegion>(MS);
+  return isa<StackArgumentsSpaceRegion, GlobalsSpaceRegion>(getMemorySpace());
 }
 
 // getBaseRegion strips away all elements and fields, and get the base region

@@ -1,4 +1,4 @@
-//===------------------------- cxa_exception.cpp --------------------------===//
+//===----------------------------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -21,6 +21,15 @@
 #include "cxa_handlers.h"
 #include "private_typeinfo.h"
 #include "unwind.h"
+
+// TODO: This is a temporary workaround for libc++abi to recognize that it's being
+// built against LLVM's libunwind. LLVM's libunwind started reporting _LIBUNWIND_VERSION
+// in LLVM 15 -- we can remove this workaround after shipping LLVM 17. Once we remove
+// this workaround, it won't be possible to build libc++abi against libunwind headers
+// from LLVM 14 and before anymore.
+#if defined(____LIBUNWIND_CONFIG_H__) && !defined(_LIBUNWIND_VERSION)
+#   define _LIBUNWIND_VERSION
+#endif
 
 #if defined(__SEH__) && !defined(__USING_SJLJ_EXCEPTIONS__)
 #include <windows.h>
@@ -1004,13 +1013,18 @@ extern "C" _Unwind_Reason_Code __gnu_unwind_frame(_Unwind_Exception*,
 static _Unwind_Reason_Code continue_unwind(_Unwind_Exception* unwind_exception,
                                            _Unwind_Context* context)
 {
-    if (__gnu_unwind_frame(unwind_exception, context) != _URC_OK)
-        return _URC_FAILURE;
+  switch (__gnu_unwind_frame(unwind_exception, context)) {
+  case _URC_OK:
     return _URC_CONTINUE_UNWIND;
+  case _URC_END_OF_STACK:
+    return _URC_END_OF_STACK;
+  default:
+    return _URC_FAILURE;
+  }
 }
 
 // ARM register names
-#if !defined(LIBCXXABI_USE_LLVM_UNWINDER)
+#if !defined(_LIBUNWIND_VERSION)
 static const uint32_t REG_UCB = 12;  // Register to save _Unwind_Control_Block
 #endif
 static const uint32_t REG_SP = 13;
@@ -1045,7 +1059,7 @@ __gxx_personality_v0(_Unwind_State state,
 
     bool native_exception = __isOurExceptionClass(unwind_exception);
 
-#if !defined(LIBCXXABI_USE_LLVM_UNWINDER)
+#if !defined(_LIBUNWIND_VERSION)
     // Copy the address of _Unwind_Control_Block to r12 so that
     // _Unwind_GetLanguageSpecificData() and _Unwind_GetRegionStart() can
     // return correct address.

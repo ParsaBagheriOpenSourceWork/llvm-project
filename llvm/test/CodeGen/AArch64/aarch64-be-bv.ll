@@ -8,8 +8,8 @@ define dso_local void @movi_modimm_t1() nounwind {
 ; CHECK:       // %bb.0:
 ; CHECK-NEXT:    adrp x8, vec_v8i16
 ; CHECK-NEXT:    add x8, x8, :lo12:vec_v8i16
-; CHECK-NEXT:    ld1 { v0.8h }, [x8]
 ; CHECK-NEXT:    movi v1.4s, #1
+; CHECK-NEXT:    ld1 { v0.8h }, [x8]
 ; CHECK-NEXT:    add v0.8h, v0.8h, v1.8h
 ; CHECK-NEXT:    st1 { v0.8h }, [x8]
 ; CHECK-NEXT:    ret
@@ -24,8 +24,8 @@ define dso_local void @movi_modimm_t2() nounwind {
 ; CHECK:       // %bb.0:
 ; CHECK-NEXT:    adrp x8, vec_v8i16
 ; CHECK-NEXT:    add x8, x8, :lo12:vec_v8i16
-; CHECK-NEXT:    ld1 { v0.8h }, [x8]
 ; CHECK-NEXT:    movi v1.4s, #1, lsl #8
+; CHECK-NEXT:    ld1 { v0.8h }, [x8]
 ; CHECK-NEXT:    add v0.8h, v0.8h, v1.8h
 ; CHECK-NEXT:    st1 { v0.8h }, [x8]
 ; CHECK-NEXT:    ret
@@ -40,8 +40,8 @@ define dso_local void @movi_modimm_t3() nounwind {
 ; CHECK:       // %bb.0:
 ; CHECK-NEXT:    adrp x8, vec_v8i16
 ; CHECK-NEXT:    add x8, x8, :lo12:vec_v8i16
-; CHECK-NEXT:    ld1 { v0.8h }, [x8]
 ; CHECK-NEXT:    movi v1.4s, #1, lsl #16
+; CHECK-NEXT:    ld1 { v0.8h }, [x8]
 ; CHECK-NEXT:    add v0.8h, v0.8h, v1.8h
 ; CHECK-NEXT:    st1 { v0.8h }, [x8]
 ; CHECK-NEXT:    ret
@@ -56,8 +56,8 @@ define dso_local void @movi_modimm_t4() nounwind {
 ; CHECK:       // %bb.0:
 ; CHECK-NEXT:    adrp x8, vec_v8i16
 ; CHECK-NEXT:    add x8, x8, :lo12:vec_v8i16
-; CHECK-NEXT:    ld1 { v0.8h }, [x8]
 ; CHECK-NEXT:    movi v1.4s, #1, lsl #24
+; CHECK-NEXT:    ld1 { v0.8h }, [x8]
 ; CHECK-NEXT:    add v0.8h, v0.8h, v1.8h
 ; CHECK-NEXT:    st1 { v0.8h }, [x8]
 ; CHECK-NEXT:    ret
@@ -72,8 +72,8 @@ define dso_local void @movi_modimm_t5() nounwind {
 ; CHECK:       // %bb.0:
 ; CHECK-NEXT:    adrp x8, vec_v8i16
 ; CHECK-NEXT:    add x8, x8, :lo12:vec_v8i16
-; CHECK-NEXT:    ld1 { v0.8h }, [x8]
 ; CHECK-NEXT:    movi v1.8h, #1
+; CHECK-NEXT:    ld1 { v0.8h }, [x8]
 ; CHECK-NEXT:    add v0.8h, v0.8h, v1.8h
 ; CHECK-NEXT:    st1 { v0.8h }, [x8]
 ; CHECK-NEXT:    ret
@@ -88,8 +88,8 @@ define dso_local void @movi_modimm_t6() nounwind {
 ; CHECK:       // %bb.0:
 ; CHECK-NEXT:    adrp x8, vec_v8i16
 ; CHECK-NEXT:    add x8, x8, :lo12:vec_v8i16
-; CHECK-NEXT:    ld1 { v0.8h }, [x8]
 ; CHECK-NEXT:    movi v1.8h, #1, lsl #8
+; CHECK-NEXT:    ld1 { v0.8h }, [x8]
 ; CHECK-NEXT:    add v0.8h, v0.8h, v1.8h
 ; CHECK-NEXT:    st1 { v0.8h }, [x8]
 ; CHECK-NEXT:    ret
@@ -104,8 +104,8 @@ define dso_local void @movi_modimm_t7() nounwind {
 ; CHECK:       // %bb.0:
 ; CHECK-NEXT:    adrp x8, vec_v8i16
 ; CHECK-NEXT:    add x8, x8, :lo12:vec_v8i16
-; CHECK-NEXT:    ld1 { v0.8h }, [x8]
 ; CHECK-NEXT:    movi v1.4s, #1, msl #8
+; CHECK-NEXT:    ld1 { v0.8h }, [x8]
 ; CHECK-NEXT:    add v0.8h, v0.8h, v1.8h
 ; CHECK-NEXT:    st1 { v0.8h }, [x8]
 ; CHECK-NEXT:    ret
@@ -120,8 +120,8 @@ define dso_local void @movi_modimm_t8() nounwind {
 ; CHECK:       // %bb.0:
 ; CHECK-NEXT:    adrp x8, vec_v8i16
 ; CHECK-NEXT:    add x8, x8, :lo12:vec_v8i16
-; CHECK-NEXT:    ld1 { v0.8h }, [x8]
 ; CHECK-NEXT:    movi v1.4s, #1, msl #16
+; CHECK-NEXT:    ld1 { v0.8h }, [x8]
 ; CHECK-NEXT:    add v0.8h, v0.8h, v1.8h
 ; CHECK-NEXT:    st1 { v0.8h }, [x8]
 ; CHECK-NEXT:    ret
@@ -136,8 +136,8 @@ define dso_local void @movi_modimm_t9() nounwind {
 ; CHECK:       // %bb.0:
 ; CHECK-NEXT:    adrp x8, vec_v8i16
 ; CHECK-NEXT:    add x8, x8, :lo12:vec_v8i16
-; CHECK-NEXT:    ld1 { v0.8h }, [x8]
 ; CHECK-NEXT:    movi v1.16b, #1
+; CHECK-NEXT:    ld1 { v0.8h }, [x8]
 ; CHECK-NEXT:    add v0.8h, v0.8h, v1.8h
 ; CHECK-NEXT:    st1 { v0.8h }, [x8]
 ; CHECK-NEXT:    ret
@@ -152,8 +152,8 @@ define dso_local void @movi_modimm_t10() nounwind {
 ; CHECK:       // %bb.0:
 ; CHECK-NEXT:    adrp x8, vec_v8i16
 ; CHECK-NEXT:    add x8, x8, :lo12:vec_v8i16
-; CHECK-NEXT:    ld1 { v0.8h }, [x8]
 ; CHECK-NEXT:    movi v1.2d, #0x00ffff0000ffff
+; CHECK-NEXT:    ld1 { v0.8h }, [x8]
 ; CHECK-NEXT:    add v0.8h, v0.8h, v1.8h
 ; CHECK-NEXT:    st1 { v0.8h }, [x8]
 ; CHECK-NEXT:    ret
@@ -168,8 +168,8 @@ define dso_local void @fmov_modimm_t11() nounwind {
 ; CHECK:       // %bb.0:
 ; CHECK-NEXT:    adrp x8, vec_v8i16
 ; CHECK-NEXT:    add x8, x8, :lo12:vec_v8i16
-; CHECK-NEXT:    ld1 { v0.8h }, [x8]
 ; CHECK-NEXT:    fmov v1.4s, #3.00000000
+; CHECK-NEXT:    ld1 { v0.8h }, [x8]
 ; CHECK-NEXT:    add v0.8h, v0.8h, v1.8h
 ; CHECK-NEXT:    st1 { v0.8h }, [x8]
 ; CHECK-NEXT:    ret
@@ -184,8 +184,8 @@ define dso_local void @fmov_modimm_t12() nounwind {
 ; CHECK:       // %bb.0:
 ; CHECK-NEXT:    adrp x8, vec_v8i16
 ; CHECK-NEXT:    add x8, x8, :lo12:vec_v8i16
-; CHECK-NEXT:    ld1 { v0.8h }, [x8]
 ; CHECK-NEXT:    fmov v1.2d, #0.17968750
+; CHECK-NEXT:    ld1 { v0.8h }, [x8]
 ; CHECK-NEXT:    add v0.8h, v0.8h, v1.8h
 ; CHECK-NEXT:    st1 { v0.8h }, [x8]
 ; CHECK-NEXT:    ret
@@ -200,8 +200,8 @@ define dso_local void @mvni_modimm_t1() nounwind {
 ; CHECK:       // %bb.0:
 ; CHECK-NEXT:    adrp x8, vec_v8i16
 ; CHECK-NEXT:    add x8, x8, :lo12:vec_v8i16
-; CHECK-NEXT:    ld1 { v0.8h }, [x8]
 ; CHECK-NEXT:    mvni v1.4s, #1
+; CHECK-NEXT:    ld1 { v0.8h }, [x8]
 ; CHECK-NEXT:    add v0.8h, v0.8h, v1.8h
 ; CHECK-NEXT:    st1 { v0.8h }, [x8]
 ; CHECK-NEXT:    ret
@@ -216,8 +216,8 @@ define dso_local void @mvni_modimm_t2() nounwind {
 ; CHECK:       // %bb.0:
 ; CHECK-NEXT:    adrp x8, vec_v8i16
 ; CHECK-NEXT:    add x8, x8, :lo12:vec_v8i16
-; CHECK-NEXT:    ld1 { v0.8h }, [x8]
 ; CHECK-NEXT:    mvni v1.4s, #1, lsl #8
+; CHECK-NEXT:    ld1 { v0.8h }, [x8]
 ; CHECK-NEXT:    add v0.8h, v0.8h, v1.8h
 ; CHECK-NEXT:    st1 { v0.8h }, [x8]
 ; CHECK-NEXT:    ret
@@ -232,8 +232,8 @@ define dso_local void @mvni_modimm_t3() nounwind {
 ; CHECK:       // %bb.0:
 ; CHECK-NEXT:    adrp x8, vec_v8i16
 ; CHECK-NEXT:    add x8, x8, :lo12:vec_v8i16
-; CHECK-NEXT:    ld1 { v0.8h }, [x8]
 ; CHECK-NEXT:    mvni v1.4s, #1, lsl #16
+; CHECK-NEXT:    ld1 { v0.8h }, [x8]
 ; CHECK-NEXT:    add v0.8h, v0.8h, v1.8h
 ; CHECK-NEXT:    st1 { v0.8h }, [x8]
 ; CHECK-NEXT:    ret
@@ -248,8 +248,8 @@ define dso_local void @mvni_modimm_t4() nounwind {
 ; CHECK:       // %bb.0:
 ; CHECK-NEXT:    adrp x8, vec_v8i16
 ; CHECK-NEXT:    add x8, x8, :lo12:vec_v8i16
-; CHECK-NEXT:    ld1 { v0.8h }, [x8]
 ; CHECK-NEXT:    mvni v1.4s, #1, lsl #24
+; CHECK-NEXT:    ld1 { v0.8h }, [x8]
 ; CHECK-NEXT:    add v0.8h, v0.8h, v1.8h
 ; CHECK-NEXT:    st1 { v0.8h }, [x8]
 ; CHECK-NEXT:    ret
@@ -264,8 +264,8 @@ define dso_local void @mvni_modimm_t5() nounwind {
 ; CHECK:       // %bb.0:
 ; CHECK-NEXT:    adrp x8, vec_v8i16
 ; CHECK-NEXT:    add x8, x8, :lo12:vec_v8i16
-; CHECK-NEXT:    ld1 { v0.8h }, [x8]
 ; CHECK-NEXT:    mvni v1.8h, #1
+; CHECK-NEXT:    ld1 { v0.8h }, [x8]
 ; CHECK-NEXT:    add v0.8h, v0.8h, v1.8h
 ; CHECK-NEXT:    st1 { v0.8h }, [x8]
 ; CHECK-NEXT:    ret
@@ -280,8 +280,8 @@ define dso_local void @mvni_modimm_t6() nounwind {
 ; CHECK:       // %bb.0:
 ; CHECK-NEXT:    adrp x8, vec_v8i16
 ; CHECK-NEXT:    add x8, x8, :lo12:vec_v8i16
-; CHECK-NEXT:    ld1 { v0.8h }, [x8]
 ; CHECK-NEXT:    mvni v1.8h, #1, lsl #8
+; CHECK-NEXT:    ld1 { v0.8h }, [x8]
 ; CHECK-NEXT:    add v0.8h, v0.8h, v1.8h
 ; CHECK-NEXT:    st1 { v0.8h }, [x8]
 ; CHECK-NEXT:    ret
@@ -296,8 +296,8 @@ define dso_local void @mvni_modimm_t7() nounwind {
 ; CHECK:       // %bb.0:
 ; CHECK-NEXT:    adrp x8, vec_v8i16
 ; CHECK-NEXT:    add x8, x8, :lo12:vec_v8i16
-; CHECK-NEXT:    ld1 { v0.8h }, [x8]
 ; CHECK-NEXT:    mvni v1.4s, #1, msl #8
+; CHECK-NEXT:    ld1 { v0.8h }, [x8]
 ; CHECK-NEXT:    add v0.8h, v0.8h, v1.8h
 ; CHECK-NEXT:    st1 { v0.8h }, [x8]
 ; CHECK-NEXT:    ret
@@ -312,8 +312,8 @@ define dso_local void @mvni_modimm_t8() nounwind {
 ; CHECK:       // %bb.0:
 ; CHECK-NEXT:    adrp x8, vec_v8i16
 ; CHECK-NEXT:    add x8, x8, :lo12:vec_v8i16
-; CHECK-NEXT:    ld1 { v0.8h }, [x8]
 ; CHECK-NEXT:    mvni v1.4s, #1, msl #16
+; CHECK-NEXT:    ld1 { v0.8h }, [x8]
 ; CHECK-NEXT:    add v0.8h, v0.8h, v1.8h
 ; CHECK-NEXT:    st1 { v0.8h }, [x8]
 ; CHECK-NEXT:    ret
@@ -1029,4 +1029,16 @@ define dso_local void @modimm_t12_call() {
   call i32 @f_v4i32(<4 x i32> <i32 0, i32 1069940736, i32 0, i32 1069940736>)
 
   ret void
+}
+
+define <2 x double> @test_v1f64(<1 x double> %0, <2 x double>* %1) {
+; CHECK-LABEL: test_v1f64:
+; CHECK:       // %bb.0:
+; CHECK-NEXT:    mvni v1.2s, #31, msl #16
+; CHECK-NEXT:    // kill: def $d0 killed $d0 def $q0
+; CHECK-NEXT:    mov v1.d[1], v0.d[0]
+; CHECK-NEXT:    ext v0.16b, v1.16b, v1.16b, #8
+; CHECK-NEXT:    ret
+  %vec = shufflevector <1 x double> <double 0xFFE00000FFE00000>, <1 x double> %0, <2 x i32> <i32 0, i32 1>
+  ret <2 x double> %vec
 }

@@ -16,7 +16,9 @@ if (MLIR_ENABLE_SPIRV_CPU_RUNNER)
   target_link_libraries(mlir-spirv-cpu-runner PRIVATE
     ${conversion_libs}
     MLIRAnalysis
+    MLIRArithmetic
     MLIRExecutionEngine
+    MLIRFunc
     MLIRGPUOps
     MLIRIR
     MLIRJitRunner
@@ -25,10 +27,9 @@ if (MLIR_ENABLE_SPIRV_CPU_RUNNER)
     MLIRMemRef
     MLIRParser
     MLIRSPIRV
-    MLIRStandard
     MLIRTargetLLVMIRExport
     MLIRTransforms
-    MLIRTranslation
+    MLIRTranslateLib
     MLIRSupport
   )
 endif()

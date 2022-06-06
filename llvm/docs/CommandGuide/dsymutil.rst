@@ -21,7 +21,7 @@ OPTIONS
 .. option:: --accelerator=<accelerator type>
 
  Specify the desired type of accelerator table. Valid options are 'Apple',
- 'Dwarf' and 'Default'.
+ 'Dwarf', 'Default' and 'None'.
 
 .. option:: --arch <arch>
 
@@ -35,7 +35,7 @@ OPTIONS
 .. option:: --dump-debug-map
 
  Dump the *executable*'s debug-map (the list of the object files containing the
- debug information) in YAML format and exit. Not DWARF link will take place.
+ debug information) in YAML format and exit. No DWARF link will take place.
 
 .. option:: --flat, -f
 

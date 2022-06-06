@@ -93,6 +93,9 @@ SmallVector<int64_t, 4> computeTileSizesForMemoryFootprintReduction(
     LinalgOp op, int64_t maxMemoryFootprint, MemReduceFn reduceFn) {
   auto opShape = LinalgOpShape::create(op);
   reduceFn(op, opShape, maxMemoryFootprint);
+  assert(opShape.computeSize() <= maxMemoryFootprint &&
+         "memory reduction function didn't reduce memory footprint of op to a "
+         "point below the maximum bytes allowed.");
   return opShape.get();
 }
 

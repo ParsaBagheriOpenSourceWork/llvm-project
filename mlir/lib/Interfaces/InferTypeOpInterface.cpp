@@ -71,7 +71,7 @@ int64_t ShapeAdaptor::getDimSize(int index) const {
     return t.cast<ShapedType>().getDimSize(index);
   if (auto attr = val.dyn_cast<Attribute>())
     return attr.cast<DenseIntElementsAttr>()
-        .getFlatValue<APInt>(index)
+        .getValues<APInt>()[index]
         .getSExtValue();
   auto *stc = val.get<ShapedTypeComponents *>();
   return stc->getDims()[index];
@@ -189,8 +189,10 @@ LogicalResult mlir::detail::inferReturnTensorTypes(
   if (failed(componentTypeFn(context, location, operands, attributes, regions,
                              retComponents)))
     return failure();
-  for (auto shapeAndType : retComponents) {
+  for (const auto &shapeAndType : retComponents) {
     assert(shapeAndType.getAttribute() == nullptr && "attribute not supported");
+    assert(shapeAndType.getElementType() &&
+           "element type required to construct tensor");
     if (shapeAndType.hasRank())
       inferredReturnTypes.push_back(RankedTensorType::get(
           shapeAndType.getDims(), shapeAndType.getElementType()));

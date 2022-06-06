@@ -12,11 +12,12 @@ add_mlir_conversion_library(MLIROpenMPToLLVM
   Core
 
   LINK_LIBS PUBLIC
+  MLIRArithmeticToLLVM
+  MLIRFuncToLLVM
   MLIRIR
   MLIRLLVMCommonConversion
   MLIRLLVMIR
   MLIRMemRefToLLVM
   MLIROpenMP
-  MLIRStandardToLLVM
   MLIRTransforms
   )

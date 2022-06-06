@@ -60,7 +60,7 @@ public:
     if (const auto *F = Init->getAnyMember()) {
       OS << " '" << F->getNameAsString() << "'";
     } else if (auto const *TSI = Init->getTypeSourceInfo()) {
-      OS << " '" << TSI->getType().getAsString() << "'";
+      OS << " '" << TSI->getType() << "'";
     }
   }
 
@@ -81,7 +81,7 @@ public:
     OS << "TemplateArgument";
     switch (A.getKind()) {
     case TemplateArgument::Type: {
-      OS << " type " << A.getAsType().getAsString();
+      OS << " type " << A.getAsType();
       break;
     }
     default:
@@ -111,7 +111,7 @@ template <typename... NodeType> std::string dumpASTString(NodeType &&... N) {
 
   Dumper.Visit(std::forward<NodeType &&>(N)...);
 
-  return OS.str();
+  return Buffer;
 }
 
 template <typename... NodeType>
@@ -126,7 +126,7 @@ std::string dumpASTString(TraversalKind TK, NodeType &&... N) {
 
   Dumper.Visit(std::forward<NodeType &&>(N)...);
 
-  return OS.str();
+  return Buffer;
 }
 
 const FunctionDecl *getFunctionNode(clang::ASTUnit *AST,

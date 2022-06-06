@@ -36,6 +36,7 @@
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/MC/MCTargetOptions.h"
+#include "llvm/MC/TargetRegistry.h"
 #include "llvm/Option/Arg.h"
 #include "llvm/Option/ArgList.h"
 #include "llvm/Option/OptTable.h"
@@ -49,7 +50,6 @@
 #include "llvm/Support/Process.h"
 #include "llvm/Support/Signals.h"
 #include "llvm/Support/SourceMgr.h"
-#include "llvm/Support/TargetRegistry.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/Timer.h"
 #include "llvm/Support/raw_ostream.h"
@@ -144,6 +144,9 @@ struct AssemblerInvocation {
   /// otherwise.
   std::string TargetABI;
 
+  /// Darwin target variant triple, the variant of the deployment target
+  /// for which the code is being compiled.
+  llvm::Optional<llvm::Triple> DarwinTargetVariantTriple;
   /// @}
 
 public:
@@ -209,6 +212,9 @@ bool AssemblerInvocation::CreateFromArgs(AssemblerInvocation &Opts,
 
   // Target Options
   Opts.Triple = llvm::Triple::normalize(Args.getLastArgValue(OPT_triple));
+  if (Arg *A = Args.getLastArg(options::OPT_darwin_target_variant_triple))
+    Opts.DarwinTargetVariantTriple = llvm::Triple(A->getValue());
+
   Opts.CPU = std::string(Args.getLastArgValue(OPT_target_cpu));
   Opts.Features = Args.getAllArgValues(OPT_target_feature);
 
@@ -228,7 +234,6 @@ bool AssemblerInvocation::CreateFromArgs(AssemblerInvocation &Opts,
         llvm::StringSwitch<llvm::DebugCompressionType>(A->getValue())
             .Case("none", llvm::DebugCompressionType::None)
             .Case("zlib", llvm::DebugCompressionType::Z)
-            .Case("zlib-gnu", llvm::DebugCompressionType::GNU)
             .Default(llvm::DebugCompressionType::None);
   }
 
@@ -408,6 +413,8 @@ static bool ExecuteAssemblerImpl(AssemblerInvocation &Opts,
   // MCObjectFileInfo needs a MCContext reference in order to initialize itself.
   std::unique_ptr<MCObjectFileInfo> MOFI(
       TheTarget->createMCObjectFileInfo(Ctx, PIC));
+  if (Opts.DarwinTargetVariantTriple)
+    MOFI->setDarwinTargetVariantTriple(*Opts.DarwinTargetVariantTriple);
   Ctx.setObjectFileInfo(MOFI.get());
 
   if (Opts.SaveTemporaryLabels)
@@ -456,7 +463,7 @@ static bool ExecuteAssemblerImpl(AssemblerInvocation &Opts,
 
     std::unique_ptr<MCCodeEmitter> CE;
     if (Opts.ShowEncoding)
-      CE.reset(TheTarget->createMCCodeEmitter(*MCII, *MRI, Ctx));
+      CE.reset(TheTarget->createMCCodeEmitter(*MCII, Ctx));
     std::unique_ptr<MCAsmBackend> MAB(
         TheTarget->createMCAsmBackend(*STI, *MRI, MCOptions));
 
@@ -476,7 +483,7 @@ static bool ExecuteAssemblerImpl(AssemblerInvocation &Opts,
     }
 
     std::unique_ptr<MCCodeEmitter> CE(
-        TheTarget->createMCCodeEmitter(*MCII, *MRI, Ctx));
+        TheTarget->createMCCodeEmitter(*MCII, Ctx));
     std::unique_ptr<MCAsmBackend> MAB(
         TheTarget->createMCAsmBackend(*STI, *MRI, MCOptions));
     assert(MAB && "Unable to create asm backend!");
@@ -550,7 +557,7 @@ static bool ExecuteAssembler(AssemblerInvocation &Opts,
   return Failed;
 }
 
-static void LLVMErrorHandler(void *UserData, const std::string &Message,
+static void LLVMErrorHandler(void *UserData, const char *Message,
                              bool GenCrashDiag) {
   DiagnosticsEngine &Diags = *static_cast<DiagnosticsEngine*>(UserData);
 

@@ -24,9 +24,7 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
-#include <climits>
 #include <cmath>
-#include <cstdlib>
 #include <cstring>
 using namespace llvm;
 
@@ -360,8 +358,11 @@ void APInt::flipBit(unsigned bitPosition) {
 
 void APInt::insertBits(const APInt &subBits, unsigned bitPosition) {
   unsigned subBitWidth = subBits.getBitWidth();
-  assert(0 < subBitWidth && (subBitWidth + bitPosition) <= BitWidth &&
-         "Illegal bit insertion");
+  assert((subBitWidth + bitPosition) <= BitWidth && "Illegal bit insertion");
+
+  // inserting no bits is a noop.
+  if (subBitWidth == 0)
+    return;
 
   // Insertion is a direct copy.
   if (subBitWidth == BitWidth) {
@@ -441,7 +442,6 @@ void APInt::insertBits(uint64_t subBits, unsigned bitPosition, unsigned numBits)
 }
 
 APInt APInt::extractBits(unsigned numBits, unsigned bitPosition) const {
-  assert(numBits > 0 && "Can't extract zero bits");
   assert(bitPosition < BitWidth && (numBits + bitPosition) <= BitWidth &&
          "Illegal bit extraction");
 
@@ -502,12 +502,51 @@ uint64_t APInt::extractBitsAsZExtValue(unsigned numBits,
   return retBits;
 }
 
-unsigned APInt::getBitsNeeded(StringRef str, uint8_t radix) {
-  assert(!str.empty() && "Invalid string length");
-  assert((radix == 10 || radix == 8 || radix == 16 || radix == 2 ||
-          radix == 36) &&
-         "Radix should be 2, 8, 10, 16, or 36!");
+unsigned APInt::getSufficientBitsNeeded(StringRef Str, uint8_t Radix) {
+  assert(!Str.empty() && "Invalid string length");
+  size_t StrLen = Str.size();
 
+  // Each computation below needs to know if it's negative.
+  unsigned IsNegative = false;
+  if (Str[0] == '-' || Str[0] == '+') {
+    IsNegative = Str[0] == '-';
+    StrLen--;
+    assert(StrLen && "String is only a sign, needs a value.");
+  }
+
+  // For radixes of power-of-two values, the bits required is accurately and
+  // easily computed.
+  if (Radix == 2)
+    return StrLen + IsNegative;
+  if (Radix == 8)
+    return StrLen * 3 + IsNegative;
+  if (Radix == 16)
+    return StrLen * 4 + IsNegative;
+
+  // Compute a sufficient number of bits that is always large enough but might
+  // be too large. This avoids the assertion in the constructor. This
+  // calculation doesn't work appropriately for the numbers 0-9, so just use 4
+  // bits in that case.
+  if (Radix == 10)
+    return (StrLen == 1 ? 4 : StrLen * 64 / 18) + IsNegative;
+
+  assert(Radix == 36);
+  return (StrLen == 1 ? 7 : StrLen * 16 / 3) + IsNegative;
+}
+
+unsigned APInt::getBitsNeeded(StringRef str, uint8_t radix) {
+  // Compute a sufficient number of bits that is always large enough but might
+  // be too large.
+  unsigned sufficient = getSufficientBitsNeeded(str, radix);
+
+  // For bases 2, 8, and 16, the sufficient number of bits is exact and we can
+  // return the value directly. For bases 10 and 36, we need to do extra work.
+  if (radix == 2 || radix == 8 || radix == 16)
+    return sufficient;
+
+  // This is grossly inefficient but accurate. We could probably do something
+  // with a computation of roughly slen*64/20 and then adjust by the value of
+  // the first few digits. But, I'm not sure how accurate that could be.
   size_t slen = str.size();
 
   // Each computation below needs to know if it's negative.
@@ -519,28 +558,6 @@ unsigned APInt::getBitsNeeded(StringRef str, uint8_t radix) {
     assert(slen && "String is only a sign, needs a value.");
   }
 
-  // For radixes of power-of-two values, the bits required is accurately and
-  // easily computed
-  if (radix == 2)
-    return slen + isNegative;
-  if (radix == 8)
-    return slen * 3 + isNegative;
-  if (radix == 16)
-    return slen * 4 + isNegative;
-
-  // FIXME: base 36
-
-  // This is grossly inefficient but accurate. We could probably do something
-  // with a computation of roughly slen*64/20 and then adjust by the value of
-  // the first few digits. But, I'm not sure how accurate that could be.
-
-  // Compute a sufficient number of bits that is always large enough but might
-  // be too large. This avoids the assertion in the constructor. This
-  // calculation doesn't work appropriately for the numbers 0-9, so just use 4
-  // bits in that case.
-  unsigned sufficient
-    = radix == 10? (slen == 1 ? 4 : slen * 64/18)
-                 : (slen == 1 ? 7 : slen * 16/3);
 
   // Convert to the actual binary value.
   APInt tmp(sufficient, StringRef(p, slen), radix);
@@ -567,7 +584,7 @@ hash_code llvm::hash_value(const APInt &Arg) {
       hash_combine_range(Arg.U.pVal, Arg.U.pVal + Arg.getNumWords()));
 }
 
-unsigned DenseMapInfo<APInt>::getHashValue(const APInt &Key) {
+unsigned DenseMapInfo<APInt, void>::getHashValue(const APInt &Key) {
   return static_cast<unsigned>(hash_value(Key));
 }
 
@@ -595,7 +612,7 @@ APInt APInt::getLoBits(unsigned numBits) const {
 APInt APInt::getSplat(unsigned NewLen, const APInt &V) {
   assert(NewLen >= V.getBitWidth() && "Can't splat to smaller bit width!");
 
-  APInt Val = V.zextOrSelf(NewLen);
+  APInt Val = V.zext(NewLen);
   for (unsigned I = V.getBitWidth(); I < NewLen; I <<= 1)
     Val |= Val << I;
 
@@ -879,10 +896,13 @@ double APInt::roundToDouble(bool isSigned) const {
 
 // Truncate to new width.
 APInt APInt::trunc(unsigned width) const {
-  assert(width < BitWidth && "Invalid APInt Truncate request");
+  assert(width <= BitWidth && "Invalid APInt Truncate request");
 
   if (width <= APINT_BITS_PER_WORD)
     return APInt(width, getRawData()[0]);
+
+  if (width == BitWidth)
+    return *this;
 
   APInt Result(getMemory(getNumWords(width)), width);
 
@@ -901,7 +921,7 @@ APInt APInt::trunc(unsigned width) const {
 
 // Truncate to new width with unsigned saturation.
 APInt APInt::truncUSat(unsigned width) const {
-  assert(width < BitWidth && "Invalid APInt Truncate request");
+  assert(width <= BitWidth && "Invalid APInt Truncate request");
 
   // Can we just losslessly truncate it?
   if (isIntN(width))
@@ -912,7 +932,7 @@ APInt APInt::truncUSat(unsigned width) const {
 
 // Truncate to new width with signed saturation.
 APInt APInt::truncSSat(unsigned width) const {
-  assert(width < BitWidth && "Invalid APInt Truncate request");
+  assert(width <= BitWidth && "Invalid APInt Truncate request");
 
   // Can we just losslessly truncate it?
   if (isSignedIntN(width))
@@ -924,10 +944,13 @@ APInt APInt::truncSSat(unsigned width) const {
 
 // Sign extend to a new width.
 APInt APInt::sext(unsigned Width) const {
-  assert(Width > BitWidth && "Invalid APInt SignExtend request");
+  assert(Width >= BitWidth && "Invalid APInt SignExtend request");
 
   if (Width <= APINT_BITS_PER_WORD)
     return APInt(Width, SignExtend64(U.VAL, BitWidth));
+
+  if (Width == BitWidth)
+    return *this;
 
   APInt Result(getMemory(getNumWords(Width)), Width);
 
@@ -948,10 +971,13 @@ APInt APInt::sext(unsigned Width) const {
 
 //  Zero extend to a new width.
 APInt APInt::zext(unsigned width) const {
-  assert(width > BitWidth && "Invalid APInt ZeroExtend request");
+  assert(width >= BitWidth && "Invalid APInt ZeroExtend request");
 
   if (width <= APINT_BITS_PER_WORD)
     return APInt(width, U.VAL);
+
+  if (width == BitWidth)
+    return *this;
 
   APInt Result(getMemory(getNumWords(width)), width);
 
@@ -1943,15 +1969,16 @@ APInt APInt::usub_ov(const APInt &RHS, bool &Overflow) const {
 
 APInt APInt::sdiv_ov(const APInt &RHS, bool &Overflow) const {
   // MININT/-1  -->  overflow.
-  Overflow = isMinSignedValue() && RHS.isAllOnesValue();
+  Overflow = isMinSignedValue() && RHS.isAllOnes();
   return sdiv(RHS);
 }
 
 APInt APInt::smul_ov(const APInt &RHS, bool &Overflow) const {
   APInt Res = *this * RHS;
 
-  if (*this != 0 && RHS != 0)
-    Overflow = Res.sdiv(RHS) != *this || Res.sdiv(*this) != RHS;
+  if (RHS != 0)
+    Overflow = Res.sdiv(RHS) != *this ||
+               (isMinSignedValue() && RHS.isAllOnes());
   else
     Overflow = false;
   return Res;
@@ -2970,10 +2997,10 @@ APInt llvm::APIntOps::ScaleBitMask(const APInt &A, unsigned NewBitWidth) {
   if (OldBitWidth == NewBitWidth)
     return A;
 
-  APInt NewA = APInt::getNullValue(NewBitWidth);
+  APInt NewA = APInt::getZero(NewBitWidth);
 
   // Check for null input.
-  if (A.isNullValue())
+  if (A.isZero())
     return NewA;
 
   if (NewBitWidth > OldBitWidth) {
@@ -2986,7 +3013,7 @@ APInt llvm::APIntOps::ScaleBitMask(const APInt &A, unsigned NewBitWidth) {
     // Merge bits - if any old bit is set, then set scale equivalent new bit.
     unsigned Scale = OldBitWidth / NewBitWidth;
     for (unsigned i = 0; i != NewBitWidth; ++i)
-      if (!A.extractBits(Scale, i * Scale).isNullValue())
+      if (!A.extractBits(Scale, i * Scale).isZero())
         NewA.setBit(i);
   }
 

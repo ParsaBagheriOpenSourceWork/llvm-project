@@ -2,6 +2,7 @@
 // RUN: %clang -target i386-unknown-linux-gnu -march=i386 -mno-x87 %s -### -o %t.o 2>&1 | FileCheck -check-prefix=NO-X87 %s
 // RUN: %clang -target i386-unknown-linux-gnu -march=i386 -m80387 %s -### -o %t.o 2>&1 | FileCheck -check-prefix=X87 %s
 // RUN: %clang -target i386-unknown-linux-gnu -march=i386 -mno-80387 %s -### -o %t.o 2>&1 | FileCheck -check-prefix=NO-X87 %s
+// RUN: %clang -target i386-unknown-linux-gnu -march=i386 -mno-fp-ret-in-387 %s -### -o %t.o 2>&1 | FileCheck -check-prefix=NO-X87 %s
 // X87: "-target-feature" "+x87"
 // NO-X87: "-target-feature" "-x87"
 
@@ -169,7 +170,7 @@
 // RUN: %clang -target i386-linux-gnu -mlvi-hardening %s -### -o %t.o 2>&1 | FileCheck -check-prefix=LVIHARDENING %s
 // RUN: %clang -target i386-linux-gnu -mno-lvi-hardening %s -### -o %t.o 2>&1 | FileCheck -check-prefix=NO-LVIHARDENING %s
 // LVIHARDENING: "-target-feature" "+lvi-load-hardening" "-target-feature" "+lvi-cfi"
-// NO-LVIHARDENING-NOT: lvi
+// NO-LVIHARDENING-NOT: "+lvi-
 
 // RUN: %clang -target i386-linux-gnu -mlvi-hardening -mspeculative-load-hardening %s -### -o %t.o 2>&1 | FileCheck -check-prefix=LVIHARDENING-SLH %s
 // LVIHARDENING-SLH: error: invalid argument 'mspeculative-load-hardening' not allowed with 'mlvi-hardening'

@@ -3,8 +3,8 @@
 // RUN: %clang_cc1 -triple aarch64-none-linux-gnu -target-feature +sve2 -fallow-half-arguments-and-returns -S -O1 -Werror -Wall -emit-llvm -o - -x c++ %s | FileCheck %s -check-prefix=CPP-CHECK
 // RUN: %clang_cc1 -DSVE_OVERLOADED_FORMS -triple aarch64-none-linux-gnu -target-feature +sve2 -fallow-half-arguments-and-returns -S -O1 -Werror -Wall -emit-llvm -o - %s | FileCheck %s
 // RUN: %clang_cc1 -DSVE_OVERLOADED_FORMS -triple aarch64-none-linux-gnu -target-feature +sve2 -fallow-half-arguments-and-returns -S -O1 -Werror -Wall -emit-llvm -o - -x c++ %s | FileCheck %s -check-prefix=CPP-CHECK
-// RUN: %clang_cc1 -triple aarch64-none-linux-gnu -target-feature +sve -fallow-half-arguments-and-returns -fsyntax-only -verify -verify-ignore-unexpected=error %s
-// RUN: %clang_cc1 -DSVE_OVERLOADED_FORMS -triple aarch64-none-linux-gnu -target-feature +sve -fallow-half-arguments-and-returns -fsyntax-only -verify=overload -verify-ignore-unexpected=error %s
+
+// REQUIRES: aarch64-registered-target
 
 #include <arm_sve.h>
 
@@ -27,8 +27,6 @@
 //
 svint32_t test_svcdot_s32(svint32_t op1, svint8_t op2, svint8_t op3)
 {
-  // overload-warning@+2 {{implicit declaration of function 'svcdot'}}
-  // expected-warning@+1 {{implicit declaration of function 'svcdot_s32'}}
   return SVE_ACLE_FUNC(svcdot,_s32,,)(op1, op2, op3, 0);
 }
 
@@ -44,8 +42,6 @@ svint32_t test_svcdot_s32(svint32_t op1, svint8_t op2, svint8_t op3)
 //
 svint32_t test_svcdot_s32_1(svint32_t op1, svint8_t op2, svint8_t op3)
 {
-  // overload-warning@+2 {{implicit declaration of function 'svcdot'}}
-  // expected-warning@+1 {{implicit declaration of function 'svcdot_s32'}}
   return SVE_ACLE_FUNC(svcdot,_s32,,)(op1, op2, op3, 90);
 }
 
@@ -61,8 +57,6 @@ svint32_t test_svcdot_s32_1(svint32_t op1, svint8_t op2, svint8_t op3)
 //
 svint32_t test_svcdot_s32_2(svint32_t op1, svint8_t op2, svint8_t op3)
 {
-  // overload-warning@+2 {{implicit declaration of function 'svcdot'}}
-  // expected-warning@+1 {{implicit declaration of function 'svcdot_s32'}}
   return SVE_ACLE_FUNC(svcdot,_s32,,)(op1, op2, op3, 180);
 }
 
@@ -78,8 +72,6 @@ svint32_t test_svcdot_s32_2(svint32_t op1, svint8_t op2, svint8_t op3)
 //
 svint32_t test_svcdot_s32_3(svint32_t op1, svint8_t op2, svint8_t op3)
 {
-  // overload-warning@+2 {{implicit declaration of function 'svcdot'}}
-  // expected-warning@+1 {{implicit declaration of function 'svcdot_s32'}}
   return SVE_ACLE_FUNC(svcdot,_s32,,)(op1, op2, op3, 270);
 }
 
@@ -95,8 +87,6 @@ svint32_t test_svcdot_s32_3(svint32_t op1, svint8_t op2, svint8_t op3)
 //
 svint64_t test_svcdot_s64(svint64_t op1, svint16_t op2, svint16_t op3)
 {
-  // overload-warning@+2 {{implicit declaration of function 'svcdot'}}
-  // expected-warning@+1 {{implicit declaration of function 'svcdot_s64'}}
   return SVE_ACLE_FUNC(svcdot,_s64,,)(op1, op2, op3, 0);
 }
 
@@ -112,8 +102,6 @@ svint64_t test_svcdot_s64(svint64_t op1, svint16_t op2, svint16_t op3)
 //
 svint64_t test_svcdot_s64_1(svint64_t op1, svint16_t op2, svint16_t op3)
 {
-  // overload-warning@+2 {{implicit declaration of function 'svcdot'}}
-  // expected-warning@+1 {{implicit declaration of function 'svcdot_s64'}}
   return SVE_ACLE_FUNC(svcdot,_s64,,)(op1, op2, op3, 90);
 }
 
@@ -129,8 +117,6 @@ svint64_t test_svcdot_s64_1(svint64_t op1, svint16_t op2, svint16_t op3)
 //
 svint64_t test_svcdot_s64_2(svint64_t op1, svint16_t op2, svint16_t op3)
 {
-  // overload-warning@+2 {{implicit declaration of function 'svcdot'}}
-  // expected-warning@+1 {{implicit declaration of function 'svcdot_s64'}}
   return SVE_ACLE_FUNC(svcdot,_s64,,)(op1, op2, op3, 180);
 }
 
@@ -146,8 +132,6 @@ svint64_t test_svcdot_s64_2(svint64_t op1, svint16_t op2, svint16_t op3)
 //
 svint64_t test_svcdot_s64_3(svint64_t op1, svint16_t op2, svint16_t op3)
 {
-  // overload-warning@+2 {{implicit declaration of function 'svcdot'}}
-  // expected-warning@+1 {{implicit declaration of function 'svcdot_s64'}}
   return SVE_ACLE_FUNC(svcdot,_s64,,)(op1, op2, op3, 270);
 }
 
@@ -163,8 +147,6 @@ svint64_t test_svcdot_s64_3(svint64_t op1, svint16_t op2, svint16_t op3)
 //
 svint32_t test_svcdot_lane_s32(svint32_t op1, svint8_t op2, svint8_t op3)
 {
-  // overload-warning@+2 {{implicit declaration of function 'svcdot_lane'}}
-  // expected-warning@+1 {{implicit declaration of function 'svcdot_lane_s32'}}
   return SVE_ACLE_FUNC(svcdot_lane,_s32,,)(op1, op2, op3, 0, 0);
 }
 
@@ -180,8 +162,6 @@ svint32_t test_svcdot_lane_s32(svint32_t op1, svint8_t op2, svint8_t op3)
 //
 svint32_t test_svcdot_lane_s32_1(svint32_t op1, svint8_t op2, svint8_t op3)
 {
-  // overload-warning@+2 {{implicit declaration of function 'svcdot_lane'}}
-  // expected-warning@+1 {{implicit declaration of function 'svcdot_lane_s32'}}
   return SVE_ACLE_FUNC(svcdot_lane,_s32,,)(op1, op2, op3, 2, 90);
 }
 
@@ -197,7 +177,5 @@ svint32_t test_svcdot_lane_s32_1(svint32_t op1, svint8_t op2, svint8_t op3)
 //
 svint64_t test_svcdot_lane_s64(svint64_t op1, svint16_t op2, svint16_t op3)
 {
-  // overload-warning@+2 {{implicit declaration of function 'svcdot_lane'}}
-  // expected-warning@+1 {{implicit declaration of function 'svcdot_lane_s64'}}
   return SVE_ACLE_FUNC(svcdot_lane,_s64,,)(op1, op2, op3, 0, 180);
 }

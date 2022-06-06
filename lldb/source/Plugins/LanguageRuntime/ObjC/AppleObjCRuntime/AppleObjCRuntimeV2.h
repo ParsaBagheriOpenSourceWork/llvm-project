@@ -33,7 +33,7 @@ public:
   static lldb_private::LanguageRuntime *
   CreateInstance(Process *process, lldb::LanguageType language);
 
-  static lldb_private::ConstString GetPluginNameStatic();
+  static llvm::StringRef GetPluginNameStatic() { return "apple-objc-v2"; }
 
   static char ID;
 
@@ -54,7 +54,7 @@ public:
   llvm::Expected<std::unique_ptr<UtilityFunction>>
   CreateObjectChecker(std::string name, ExecutionContext &exe_ctx) override;
 
-  ConstString GetPluginName() override;
+  llvm::StringRef GetPluginName() override { return GetPluginNameStatic(); }
 
   ObjCRuntimeVersions GetRuntimeVersion() const override {
     return ObjCRuntimeVersions::eAppleObjC_V2;
@@ -399,6 +399,7 @@ private:
   };
 
   void WarnIfNoClassesCached(SharedCacheWarningReason reason);
+  void WarnIfNoExpandedSharedCache();
 
   lldb::addr_t GetSharedCacheReadOnlyAddress();
   lldb::addr_t GetSharedCacheBaseAddress();
@@ -432,7 +433,8 @@ private:
   std::unique_ptr<NonPointerISACache> m_non_pointer_isa_cache_up;
   std::unique_ptr<TaggedPointerVendor> m_tagged_pointer_vendor_up;
   EncodingToTypeSP m_encoding_to_type_sp;
-  bool m_noclasses_warning_emitted;
+  std::once_flag m_no_classes_cached_warning;
+  std::once_flag m_no_expanded_cache_warning;
   llvm::Optional<std::pair<lldb::addr_t, lldb::addr_t>> m_CFBoolean_values;
   uint64_t m_realized_class_generation_count;
 };

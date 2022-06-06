@@ -1340,16 +1340,16 @@ define <4 x i16> @test_extracts_inserts_varidx_insert(<8 x i16> %x, i32 %idx) {
 ; CHECK-NEXT:    .pad #8
 ; CHECK-NEXT:    sub sp, sp, #8
 ; CHECK-NEXT:    vmov.u16 r1, d0[1]
-; CHECK-NEXT:    and r12, r0, #3
+; CHECK-NEXT:    and r0, r0, #3
 ; CHECK-NEXT:    vmov.u16 r2, d0[2]
-; CHECK-NEXT:    mov r0, sp
-; CHECK-NEXT:    vmov.u16 r3, d0[3]
-; CHECK-NEXT:    orr r0, r0, r12, lsl #1
+; CHECK-NEXT:    mov r3, sp
+; CHECK-NEXT:    vmov.u16 r12, d0[3]
+; CHECK-NEXT:    orr r0, r3, r0, lsl #1
 ; CHECK-NEXT:    vst1.16 {d0[0]}, [r0:16]
 ; CHECK-NEXT:    vldr d0, [sp]
 ; CHECK-NEXT:    vmov.16 d0[1], r1
 ; CHECK-NEXT:    vmov.16 d0[2], r2
-; CHECK-NEXT:    vmov.16 d0[3], r3
+; CHECK-NEXT:    vmov.16 d0[3], r12
 ; CHECK-NEXT:    add sp, sp, #8
 ; CHECK-NEXT:    bx lr
   %tmp = extractelement <8 x i16> %x, i32 0
@@ -1741,8 +1741,7 @@ entry:
 define <4 x i32> @test_concat_v4i32_v4i32_v4i32(<4 x i32> %x, <4 x i32> %y) #0 {
 ; CHECK-LABEL: test_concat_v4i32_v4i32_v4i32:
 ; CHECK:       @ %bb.0: @ %entry
-; CHECK-NEXT:    vext.32 q8, q0, q0, #2
-; CHECK-NEXT:    vext.32 q0, q8, q1, #2
+; CHECK-NEXT:    vmov.f64 d1, d2
 ; CHECK-NEXT:    bx lr
 entry:
   %vecinit6 = shufflevector <4 x i32> %x, <4 x i32> %y, <4 x i32> <i32 0, i32 1, i32 4, i32 5>
@@ -1753,8 +1752,7 @@ define <4 x i32> @test_concat_v4i32_v2i32_v4i32(<2 x i32> %x, <4 x i32> %y) #0 {
 ; CHECK-LABEL: test_concat_v4i32_v2i32_v4i32:
 ; CHECK:       @ %bb.0: @ %entry
 ; CHECK-NEXT:    @ kill: def $d0 killed $d0 def $q0
-; CHECK-NEXT:    vext.32 q8, q0, q0, #2
-; CHECK-NEXT:    vext.32 q0, q8, q1, #2
+; CHECK-NEXT:    vmov.f64 d1, d2
 ; CHECK-NEXT:    bx lr
 entry:
   %vecext = extractelement <2 x i32> %x, i32 0

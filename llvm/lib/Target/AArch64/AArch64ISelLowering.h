@@ -55,6 +55,8 @@ enum NodeType : unsigned {
   // x29, x29` marker instruction.
   CALL_RVMARKER,
 
+  CALL_BTI, // Function call followed by a BTI instruction.
+
   // Produces the full sequence of instructions for getting the thread pointer
   // offset of a variable into X0, using the TLSDesc model.
   TLSDESC_CALLSEQ,
@@ -77,14 +79,15 @@ enum NodeType : unsigned {
   SBC, // adc, sbc instructions
 
   // Predicated instructions where inactive lanes produce undefined results.
-  ADD_PRED,
+  ABDS_PRED,
+  ABDU_PRED,
   FADD_PRED,
   FDIV_PRED,
   FMA_PRED,
-  FMAXNM_PRED,
-  FMINNM_PRED,
   FMAX_PRED,
+  FMAXNM_PRED,
   FMIN_PRED,
+  FMINNM_PRED,
   FMUL_PRED,
   FSUB_PRED,
   MUL_PRED,
@@ -96,13 +99,14 @@ enum NodeType : unsigned {
   SMIN_PRED,
   SRA_PRED,
   SRL_PRED,
-  SUB_PRED,
   UDIV_PRED,
   UMAX_PRED,
   UMIN_PRED,
 
   // Unpredicated vector instructions
   BIC,
+
+  SRAD_MERGE_OP1,
 
   // Predicated instructions with the result of inactive lanes provided by the
   // last operand.
@@ -228,15 +232,8 @@ enum NodeType : unsigned {
   SADDV,
   UADDV,
 
-  // Vector halving addition
-  SHADD,
-  UHADD,
-
-  // Vector rounding halving addition
-  SRHADD,
-  URHADD,
-
-  // Unsigned Add Long Pairwise
+  // Add Long Pairwise
+  SADDLP,
   UADDLP,
 
   // udot/sdot instructions
@@ -322,6 +319,8 @@ enum NodeType : unsigned {
 
   BITREVERSE_MERGE_PASSTHRU,
   BSWAP_MERGE_PASSTHRU,
+  REVH_MERGE_PASSTHRU,
+  REVW_MERGE_PASSTHRU,
   CTLZ_MERGE_PASSTHRU,
   CTPOP_MERGE_PASSTHRU,
   DUP_MERGE_PASSTHRU,
@@ -405,6 +404,10 @@ enum NodeType : unsigned {
   SSTNT1_PRED,
   SSTNT1_INDEX_PRED,
 
+  // Asserts that a function argument (i32) is zero-extended to i8 by
+  // the caller
+  ASSERT_ZEXT_BOOL,
+
   // Strict (exception-raising) floating point comparison
   STRICT_FCMP = ISD::FIRST_TARGET_STRICTFP_OPCODE,
   STRICT_FCMPE,
@@ -442,6 +445,12 @@ enum NodeType : unsigned {
   LDP,
   STP,
   STNP,
+
+  // Memory Operations
+  MOPS_MEMSET,
+  MOPS_MEMSET_TAGGING,
+  MOPS_MEMCOPY,
+  MOPS_MEMMOVE,
 };
 
 } // end namespace AArch64ISD
@@ -479,12 +488,16 @@ const unsigned RoundingBitsPos = 22;
 } // namespace AArch64
 
 class AArch64Subtarget;
-class AArch64TargetMachine;
 
 class AArch64TargetLowering : public TargetLowering {
 public:
   explicit AArch64TargetLowering(const TargetMachine &TM,
                                  const AArch64Subtarget &STI);
+
+  /// Control the following reassociation of operands: (op (op x, c1), y) -> (op
+  /// (op x, y), c1) where N0 is (op x, c1) and N1 is y.
+  bool isReassocProfitable(SelectionDAG &DAG, SDValue N0,
+                           SDValue N1) const override;
 
   /// Selects the correct CCAssignFn for a given CallingConvention value.
   CCAssignFn *CCAssignFnForCall(CallingConv::ID CC, bool IsVarArg) const;
@@ -595,8 +608,8 @@ public:
   bool isLegalAddImmediate(int64_t) const override;
   bool isLegalICmpImmediate(int64_t) const override;
 
-  bool isMulAddWithConstProfitable(const SDValue &AddNode,
-                                   const SDValue &ConstNode) const override;
+  bool isMulAddWithConstProfitable(SDValue AddNode,
+                                   SDValue ConstNode) const override;
 
   bool shouldConsiderGEPOffsetSplit() const override;
 
@@ -636,6 +649,10 @@ public:
   bool isDesirableToCommuteWithShift(const SDNode *N,
                                      CombineLevel Level) const override;
 
+  /// Return true if it is profitable to fold a pair of shifts into a mask.
+  bool shouldFoldConstantShiftPairToMask(const SDNode *N,
+                                         CombineLevel Level) const override;
+
   /// Returns true if it is beneficial to convert a load of a constant
   /// to just the constant itself.
   bool shouldConvertConstantLoadToIntImm(const APInt &Imm,
@@ -665,7 +682,8 @@ public:
 
   TargetLoweringBase::AtomicExpansionKind
   shouldExpandAtomicLoadInIR(LoadInst *LI) const override;
-  bool shouldExpandAtomicStoreInIR(StoreInst *SI) const override;
+  TargetLoweringBase::AtomicExpansionKind
+  shouldExpandAtomicStoreInIR(StoreInst *SI) const override;
   TargetLoweringBase::AtomicExpansionKind
   shouldExpandAtomicRMWInIR(AtomicRMWInst *AI) const override;
 
@@ -739,7 +757,9 @@ public:
     if (!VT.isVector())
       return hasAndNotCompare(Y);
 
-    return VT.getSizeInBits() >= 64; // vector 'bic'
+    TypeSize TS = VT.getSizeInBits();
+    // TODO: We should be able to use bic/bif too for SVE.
+    return !TS.isScalable() && TS.getFixedValue() >= 64; // vector 'bic'
   }
 
   bool shouldProduceAndByConstByHoistingConstFromShiftsLHSOfAnd(
@@ -768,6 +788,8 @@ public:
 
   bool preferIncOfAddToSubOfNot(EVT VT) const override;
 
+  bool shouldConvertFpToSat(unsigned Op, EVT FPVT, EVT VT) const override;
+
   bool hasBitPreservingFPLogic(EVT VT) const override {
     // FIXME: Is this always true? It should be true for vectors at least.
     return VT == MVT::f32 || VT == MVT::f64;
@@ -795,13 +817,13 @@ public:
   /// Returns true if \p VecTy is a legal interleaved access type. This
   /// function checks the vector element type and the overall width of the
   /// vector.
-  bool isLegalInterleavedAccessType(VectorType *VecTy,
-                                    const DataLayout &DL) const;
+  bool isLegalInterleavedAccessType(VectorType *VecTy, const DataLayout &DL,
+                                    bool &UseScalable) const;
 
   /// Returns the number of interleaved accesses that will be generated when
   /// lowering accesses of the given type.
-  unsigned getNumInterleavedAccesses(VectorType *VecTy,
-                                     const DataLayout &DL) const;
+  unsigned getNumInterleavedAccesses(VectorType *VecTy, const DataLayout &DL,
+                                     bool UseScalable) const;
 
   MachineMemOperand::Flags getTargetMMOFlags(
     const Instruction &I) const override;
@@ -830,11 +852,13 @@ public:
     return 128;
   }
 
-  bool isAllActivePredicate(SDValue N) const;
+  bool isAllActivePredicate(SelectionDAG &DAG, SDValue N) const;
   EVT getPromotedVTForPredicate(EVT VT) const;
 
   EVT getAsmOperandValueType(const DataLayout &DL, Type *Ty,
                              bool AllowUnknown = false) const override;
+
+  bool shouldExpandGetActiveLaneMask(EVT VT, EVT OpVT) const override;
 
 private:
   /// Keep a pointer to the AArch64Subtarget around so that we can
@@ -874,13 +898,11 @@ private:
 
   SDValue LowerMLOAD(SDValue Op, SelectionDAG &DAG) const;
 
+  SDValue LowerINTRINSIC_W_CHAIN(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerINTRINSIC_WO_CHAIN(SDValue Op, SelectionDAG &DAG) const;
 
-  bool isEligibleForTailCallOptimization(
-      SDValue Callee, CallingConv::ID CalleeCC, bool isVarArg,
-      const SmallVectorImpl<ISD::OutputArg> &Outs,
-      const SmallVectorImpl<SDValue> &OutVals,
-      const SmallVectorImpl<ISD::InputArg> &Ins, SelectionDAG &DAG) const;
+  bool
+  isEligibleForTailCallOptimization(const CallLoweringInfo &CLI) const;
 
   /// Finds the incoming stack arguments which overlap the given fixed stack
   /// object and incorporates their load into the current chain. This prevents
@@ -958,8 +980,8 @@ private:
   SDValue LowerVECTOR_SHUFFLE(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerSPLAT_VECTOR(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerDUPQLane(SDValue Op, SelectionDAG &DAG) const;
-  SDValue LowerToPredicatedOp(SDValue Op, SelectionDAG &DAG, unsigned NewOp,
-                              bool OverrideNEON = false) const;
+  SDValue LowerToPredicatedOp(SDValue Op, SelectionDAG &DAG,
+                              unsigned NewOp) const;
   SDValue LowerToScalableOp(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerVECTOR_SPLICE(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerEXTRACT_SUBVECTOR(SDValue Op, SelectionDAG &DAG) const;
@@ -1030,6 +1052,8 @@ private:
 
   SDValue BuildSDIVPow2(SDNode *N, const APInt &Divisor, SelectionDAG &DAG,
                         SmallVectorImpl<SDNode *> &Created) const override;
+  SDValue BuildSREMPow2(SDNode *N, const APInt &Divisor, SelectionDAG &DAG,
+                        SmallVectorImpl<SDNode *> &Created) const override;
   SDValue getSqrtEstimate(SDValue Operand, SelectionDAG &DAG, int Enabled,
                           int &ExtraSteps, bool &UseOneConst,
                           bool Reciprocal) const override;
@@ -1071,7 +1095,7 @@ private:
   }
 
   bool shouldExtendGSIndex(EVT VT, EVT &EltTy) const override;
-  bool shouldRemoveExtendFromGSIndex(EVT VT) const override;
+  bool shouldRemoveExtendFromGSIndex(EVT IndexVT, EVT DataVT) const override;
   bool isVectorLoadExtDesirable(SDValue ExtVal) const override;
   bool isUsedByReturnOnly(SDNode *N, SDValue &Chain) const override;
   bool mayBeEmittedAsTailCall(const CallInst *CI) const override;
@@ -1123,8 +1147,8 @@ private:
   // with BITCAST used otherwise.
   SDValue getSVESafeBitCast(EVT VT, SDValue Op, SelectionDAG &DAG) const;
 
-  bool isConstantUnsignedBitfieldExtactLegal(unsigned Opc, LLT Ty1,
-                                             LLT Ty2) const override;
+  bool isConstantUnsignedBitfieldExtractLegal(unsigned Opc, LLT Ty1,
+                                              LLT Ty2) const override;
 };
 
 namespace AArch64 {

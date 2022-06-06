@@ -25,8 +25,10 @@
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/Frontend/FrontendDiagnostic.h"
 #include "clang/Lex/Preprocessor.h"
+#include "llvm/ADT/Hashing.h"
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/CodeGen/MachineOptimizationRemarkEmitter.h"
+#include "llvm/Demangle/Demangle.h"
 #include "llvm/IR/DebugInfo.h"
 #include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/DiagnosticPrinter.h"
@@ -49,6 +51,8 @@
 #include <memory>
 using namespace clang;
 using namespace llvm;
+
+#define DEBUG_TYPE "codegenaction"
 
 namespace clang {
   class BackendConsumer;
@@ -124,6 +128,17 @@ namespace clang {
     std::unique_ptr<CodeGenerator> Gen;
 
     SmallVector<LinkModule, 4> LinkModules;
+
+    // A map from mangled names to their function's source location, used for
+    // backend diagnostics as the Clang AST may be unavailable. We actually use
+    // the mangled name's hash as the key because mangled names can be very
+    // long and take up lots of space. Using a hash can cause name collision,
+    // but that is rare and the consequences are pointing to a wrong source
+    // location which is not severe. This is a vector instead of an actual map
+    // because we optimize for time building this map rather than time
+    // retrieving an entry, as backend diagnostics are uncommon.
+    std::vector<std::pair<llvm::hash_code, FullSourceLoc>>
+        ManglingFullSourceLocs;
 
     // This is here so that the diagnostic printer knows the module a diagnostic
     // refers to.
@@ -325,9 +340,39 @@ namespace clang {
           CodeGenOpts.getProfileUse() != CodeGenOptions::ProfileNone)
         Ctx.setDiagnosticsHotnessRequested(true);
 
+      if (CodeGenOpts.MisExpect) {
+        Ctx.setMisExpectWarningRequested(true);
+      }
+
+      if (CodeGenOpts.DiagnosticsMisExpectTolerance) {
+        Ctx.setDiagnosticsMisExpectTolerance(
+            CodeGenOpts.DiagnosticsMisExpectTolerance);
+      }
+
       // Link each LinkModule into our module.
       if (LinkInModules())
         return;
+
+      for (auto &F : getModule()->functions()) {
+        if (const Decl *FD = Gen->GetDeclForMangledName(F.getName())) {
+          auto Loc = FD->getASTContext().getFullLoc(FD->getLocation());
+          // TODO: use a fast content hash when available.
+          auto NameHash = llvm::hash_value(F.getName());
+          ManglingFullSourceLocs.push_back(std::make_pair(NameHash, Loc));
+        }
+      }
+
+      if (CodeGenOpts.ClearASTBeforeBackend) {
+        LLVM_DEBUG(llvm::dbgs() << "Clearing AST...\n");
+        // Access to the AST is no longer available after this.
+        // Other things that the ASTContext manages are still available, e.g.
+        // the SourceManager. It'd be nice if we could separate out all the
+        // things in ASTContext used after this point and null out the
+        // ASTContext, but too many various parts of the ASTContext are still
+        // used in various parts.
+        C.cleanup();
+        C.getAllocator().Reset();
+      }
 
       EmbedBitcode(getModule(), CodeGenOpts, llvm::MemoryBufferRef());
 
@@ -375,6 +420,8 @@ namespace clang {
                                 bool &BadDebugInfo, StringRef &Filename,
                                 unsigned &Line, unsigned &Column) const;
 
+    Optional<FullSourceLoc> getFunctionSourceLocation(const Function &F) const;
+
     void DiagnosticHandlerImpl(const llvm::DiagnosticInfo &DI);
     /// Specialized handler for InlineAsm diagnostic.
     /// \return True if the diagnostic has been successfully reported, false
@@ -402,6 +449,9 @@ namespace clang {
     void OptimizationFailureHandler(
         const llvm::DiagnosticInfoOptimizationFailure &D);
     void DontCallDiagHandler(const DiagnosticInfoDontCall &D);
+    /// Specialized handler for misexpect warnings.
+    /// Note that misexpect remarks are emitted through ORE
+    void MisExpectDiagHandler(const llvm::DiagnosticInfoMisExpect &D);
   };
 
   void BackendConsumer::anchor() {}
@@ -533,7 +583,6 @@ void BackendConsumer::SrcMgrDiagHandler(const llvm::DiagnosticInfoSrcMgr &DI) {
   // If Loc is invalid, we still need to report the issue, it just gets no
   // location info.
   Diags.Report(Loc, DiagID).AddString(Message);
-  return;
 }
 
 bool
@@ -568,17 +617,16 @@ BackendConsumer::StackSizeDiagHandler(const llvm::DiagnosticInfoStackSize &D) {
     // We do not know how to format other severities.
     return false;
 
-  if (const Decl *ND = Gen->GetDeclForMangledName(D.getFunction().getName())) {
-    // FIXME: Shouldn't need to truncate to uint32_t
-    Diags.Report(ND->getASTContext().getFullLoc(ND->getLocation()),
-                 diag::warn_fe_frame_larger_than)
-        << static_cast<uint32_t>(D.getStackSize())
-        << static_cast<uint32_t>(D.getStackLimit())
-        << Decl::castToDeclContext(ND);
-    return true;
-  }
+  auto Loc = getFunctionSourceLocation(D.getFunction());
+  if (!Loc)
+    return false;
 
-  return false;
+  // FIXME: Shouldn't need to truncate to uint32_t
+  Diags.Report(*Loc, diag::warn_fe_frame_larger_than)
+      << static_cast<uint32_t>(D.getStackSize())
+      << static_cast<uint32_t>(D.getStackLimit())
+      << llvm::demangle(D.getFunction().getName().str());
+  return true;
 }
 
 const FullSourceLoc BackendConsumer::getBestLocationFromDebugLoc(
@@ -607,9 +655,10 @@ const FullSourceLoc BackendConsumer::getBestLocationFromDebugLoc(
   // function definition. We use the definition's right brace to differentiate
   // from diagnostics that genuinely relate to the function itself.
   FullSourceLoc Loc(DILoc, SourceMgr);
-  if (Loc.isInvalid())
-    if (const Decl *FD = Gen->GetDeclForMangledName(D.getFunction().getName()))
-      Loc = FD->getASTContext().getFullLoc(FD->getLocation());
+  if (Loc.isInvalid()) {
+    if (auto MaybeLoc = getFunctionSourceLocation(D.getFunction()))
+      Loc = *MaybeLoc;
+  }
 
   if (DILoc.isInvalid() && D.isLocationAvailable())
     // If we were not able to translate the file:line:col information
@@ -620,6 +669,16 @@ const FullSourceLoc BackendConsumer::getBestLocationFromDebugLoc(
         << Filename << Line << Column;
 
   return Loc;
+}
+
+Optional<FullSourceLoc>
+BackendConsumer::getFunctionSourceLocation(const Function &F) const {
+  auto Hash = llvm::hash_value(F.getName());
+  for (const auto &Pair : ManglingFullSourceLocs) {
+    if (Pair.first == Hash)
+      return Pair.second;
+  }
+  return Optional<FullSourceLoc>();
 }
 
 void BackendConsumer::UnsupportedDiagHandler(
@@ -760,30 +819,37 @@ void BackendConsumer::OptimizationFailureHandler(
 }
 
 void BackendConsumer::DontCallDiagHandler(const DiagnosticInfoDontCall &D) {
-  if (const Decl *DE = Gen->GetDeclForMangledName(D.getFunctionName()))
-    if (const auto *FD = dyn_cast<FunctionDecl>(DE)) {
-      assert(FD->hasAttr<ErrorAttr>() &&
-             "expected error or warning function attribute");
+  SourceLocation LocCookie =
+      SourceLocation::getFromRawEncoding(D.getLocCookie());
 
-      if (const auto *EA = FD->getAttr<ErrorAttr>()) {
-        assert((EA->isError() || EA->isWarning()) &&
-               "ErrorAttr neither error or warning");
+  // FIXME: we can't yet diagnose indirect calls. When/if we can, we
+  // should instead assert that LocCookie.isValid().
+  if (!LocCookie.isValid())
+    return;
 
-        SourceLocation LocCookie =
-            SourceLocation::getFromRawEncoding(D.getLocCookie());
+  Diags.Report(LocCookie, D.getSeverity() == DiagnosticSeverity::DS_Error
+                              ? diag::err_fe_backend_error_attr
+                              : diag::warn_fe_backend_warning_attr)
+      << llvm::demangle(D.getFunctionName().str()) << D.getNote();
+}
 
-        // FIXME: we can't yet diagnose indirect calls. When/if we can, we
-        // should instead assert that LocCookie.isValid().
-        if (!LocCookie.isValid())
-          return;
+void BackendConsumer::MisExpectDiagHandler(
+    const llvm::DiagnosticInfoMisExpect &D) {
+  StringRef Filename;
+  unsigned Line, Column;
+  bool BadDebugInfo = false;
+  FullSourceLoc Loc =
+      getBestLocationFromDebugLoc(D, BadDebugInfo, Filename, Line, Column);
 
-        Diags.Report(LocCookie, EA->isError()
-                                    ? diag::err_fe_backend_error_attr
-                                    : diag::warn_fe_backend_warning_attr)
-            << FD << EA->getUserDiagnostic();
-      }
-    }
-  // TODO: assert if DE or FD were nullptr?
+  Diags.Report(Loc, diag::warn_profile_data_misexpect) << D.getMsg().str();
+
+  if (BadDebugInfo)
+    // If we were not able to translate the file:line:col information
+    // back to a SourceLocation, at least emit a note stating that
+    // we could not translate this location. This can happen in the
+    // case of #line directives.
+    Diags.Report(Loc, diag::note_fe_backend_invalid_loc)
+        << Filename << Line << Column;
 }
 
 /// This function is invoked when the backend needs
@@ -859,6 +925,9 @@ void BackendConsumer::DiagnosticHandlerImpl(const DiagnosticInfo &DI) {
     return;
   case llvm::DK_DontCall:
     DontCallDiagHandler(cast<DiagnosticInfoDontCall>(DI));
+    return;
+  case llvm::DK_MisExpect:
+    MisExpectDiagHandler(cast<DiagnosticInfoMisExpect>(DI));
     return;
   default:
     // Plugin IDs are not bound to any value as they are set dynamically.
@@ -947,6 +1016,9 @@ CodeGenAction::CreateASTConsumer(CompilerInstance &CI, StringRef InFile) {
 
   if (BA != Backend_EmitNothing && !OS)
     return nullptr;
+
+  if (CI.getCodeGenOpts().OpaquePointers)
+    VMContext->setOpaquePointers(true);
 
   // Load bitcode modules to link with, if we need to.
   if (LinkModules.empty())
@@ -1078,7 +1150,7 @@ void CodeGenAction::ExecuteAction() {
   auto &CodeGenOpts = CI.getCodeGenOpts();
   auto &Diagnostics = CI.getDiagnostics();
   std::unique_ptr<raw_pwrite_stream> OS =
-      GetOutputStream(CI, getCurrentFile(), BA);
+      GetOutputStream(CI, getCurrentFileOrBufferName(), BA);
   if (BA != Backend_EmitNothing && !OS)
     return;
 
@@ -1099,6 +1171,7 @@ void CodeGenAction::ExecuteAction() {
     TheModule->setTargetTriple(TargetOpts.Triple);
   }
 
+  EmbedObject(TheModule.get(), CodeGenOpts, Diagnostics);
   EmbedBitcode(TheModule.get(), CodeGenOpts, *MainFile);
 
   LLVMContext &Ctx = TheModule->getContext();

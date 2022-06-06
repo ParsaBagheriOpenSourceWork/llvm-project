@@ -266,7 +266,7 @@ public:
   static const TST TST_char32 = clang::TST_char32;
   static const TST TST_int = clang::TST_int;
   static const TST TST_int128 = clang::TST_int128;
-  static const TST TST_extint = clang::TST_extint;
+  static const TST TST_bitint = clang::TST_bitint;
   static const TST TST_half = clang::TST_half;
   static const TST TST_BFloat16 = clang::TST_BFloat16;
   static const TST TST_float = clang::TST_float;
@@ -404,7 +404,7 @@ private:
             T == TST_underlyingType || T == TST_atomic);
   }
   static bool isExprRep(TST T) {
-    return (T == TST_typeofExpr || T == TST_decltype || T == TST_extint);
+    return (T == TST_typeofExpr || T == TST_decltype || T == TST_bitint);
   }
   static bool isTemplateIdRep(TST T) {
     return (T == TST_auto || T == TST_decltype_auto);
@@ -434,8 +434,7 @@ public:
         FS_noreturn_specified(false), Friend_specified(false),
         ConstexprSpecifier(
             static_cast<unsigned>(ConstexprSpecKind::Unspecified)),
-        FS_explicit_specifier(), Attrs(attrFactory), writtenBS(),
-        ObjCQualifiers(nullptr) {}
+        Attrs(attrFactory), writtenBS(), ObjCQualifiers(nullptr) {}
 
   // storage-class-specifier
   SCS getStorageClassSpec() const { return (SCS)StorageClassSpec; }
@@ -517,7 +516,8 @@ public:
   SourceLocation getTypeSpecSatLoc() const { return TSSatLoc; }
 
   SourceLocation getTypeSpecTypeNameLoc() const {
-    assert(isDeclRep((TST) TypeSpecType) || TypeSpecType == TST_typename);
+    assert(isDeclRep((TST)TypeSpecType) || isTypeRep((TST)TypeSpecType) ||
+           isExprRep((TST)TypeSpecType));
     return TSTNameLoc;
   }
 
@@ -703,7 +703,7 @@ public:
   bool SetTypePipe(bool isPipe, SourceLocation Loc,
                        const char *&PrevSpec, unsigned &DiagID,
                        const PrintingPolicy &Policy);
-  bool SetExtIntType(SourceLocation KWLoc, Expr *BitWidth,
+  bool SetBitIntType(SourceLocation KWLoc, Expr *BitWidth,
                      const char *&PrevSpec, unsigned &DiagID,
                      const PrintingPolicy &Policy);
   bool SetTypeSpecSat(SourceLocation Loc, const char *&PrevSpec,
@@ -787,7 +787,7 @@ public:
   /// int __attribute__((may_alias)) __attribute__((aligned(16))) var;
   /// \endcode
   ///
-  void addAttributes(ParsedAttributesView &AL) {
+  void addAttributes(const ParsedAttributesView &AL) {
     Attrs.addAll(AL.begin(), AL.end());
   }
 
@@ -2514,11 +2514,11 @@ public:
   ///                                 __attribute__((common,deprecated));
   ///
   /// Also extends the range of the declarator.
-  void takeAttributes(ParsedAttributes &attrs, SourceLocation lastLoc) {
+  void takeAttributes(ParsedAttributes &attrs) {
     Attrs.takeAllFrom(attrs);
 
-    if (!lastLoc.isInvalid())
-      SetRangeEnd(lastLoc);
+    if (attrs.Range.getEnd().isValid())
+      SetRangeEnd(attrs.Range.getEnd());
   }
 
   const ParsedAttributes &getAttributes() const { return Attrs; }

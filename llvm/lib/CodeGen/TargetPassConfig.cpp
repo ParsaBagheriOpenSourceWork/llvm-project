@@ -47,7 +47,6 @@
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Utils.h"
-#include "llvm/Transforms/Utils/SymbolRewriter.h"
 #include <cassert>
 #include <string>
 
@@ -139,6 +138,11 @@ static cl::opt<RunOutliner> EnableMachineOutliner(
                           "Disable all outlining"),
                // Sentinel value for unspecified option.
                clEnumValN(RunOutliner::AlwaysOutline, "", "")));
+// Disable the pass to fix unwind information. Whether the pass is included in
+// the pipeline is controlled via the target options, this option serves as
+// manual override.
+static cl::opt<bool> DisableCFIFixup("disable-cfi-fixup", cl::Hidden,
+                                     cl::desc("Disable the CFI fixup pass"));
 // Enable or disable FastISel. Both options are needed, because
 // FastISel is enabled by default with -fast, and we wish to be
 // able to enable or disable fast-isel independently from -O0.
@@ -175,12 +179,12 @@ static cl::opt<bool>
 // Disable MIRProfileLoader before RegAlloc. This is for for debugging and
 // tuning purpose.
 static cl::opt<bool> DisableRAFSProfileLoader(
-    "disable-ra-fsprofile-loader", cl::init(true), cl::Hidden,
+    "disable-ra-fsprofile-loader", cl::init(false), cl::Hidden,
     cl::desc("Disable MIRProfileLoader before RegAlloc"));
 // Disable MIRProfileLoader before BloackPlacement. This is for for debugging
 // and tuning purpose.
 static cl::opt<bool> DisableLayoutFSProfileLoader(
-    "disable-layout-fsprofile-loader", cl::init(true), cl::Hidden,
+    "disable-layout-fsprofile-loader", cl::init(false), cl::Hidden,
     cl::desc("Disable MIRProfileLoader before BlockPlacement"));
 // Specify FSProfile file name.
 static cl::opt<std::string>
@@ -256,6 +260,11 @@ static cl::opt<bool> DisableExpandReductions(
     "disable-expand-reductions", cl::init(false), cl::Hidden,
     cl::desc("Disable the expand reduction intrinsics pass from running"));
 
+/// Disable the select optimization pass.
+static cl::opt<bool> DisableSelectOptimize(
+    "disable-select-optimize", cl::init(true), cl::Hidden,
+    cl::desc("Disable the select-optimization pass from running"));
+
 /// Allow standard passes to be disabled by command line options. This supports
 /// simple binary flags that either suppress the pass or do nothing.
 /// i.e. -disable-mypass=false has no effect.
@@ -328,7 +337,7 @@ static IdentifyingPassPtr overridePass(AnalysisID StandardID,
 
 // Find the FSProfile file name. The internal option takes the precedence
 // before getting from TargetMachine.
-static const std::string getFSProfileFile(const TargetMachine *TM) {
+static std::string getFSProfileFile(const TargetMachine *TM) {
   if (!FSProfileFile.empty())
     return FSProfileFile.getValue();
   const Optional<PGOOptions> &PGOOpt = TM->getPGOOption();
@@ -339,7 +348,7 @@ static const std::string getFSProfileFile(const TargetMachine *TM) {
 
 // Find the Profile remapping file name. The internal option takes the
 // precedence before getting from TargetMachine.
-static const std::string getFSRemappingFile(const TargetMachine *TM) {
+static std::string getFSRemappingFile(const TargetMachine *TM) {
   if (!FSRemappingFile.empty())
     return FSRemappingFile.getValue();
   const Optional<PGOOptions> &PGOOpt = TM->getPGOOption();
@@ -361,12 +370,9 @@ namespace {
 struct InsertedPass {
   AnalysisID TargetPassID;
   IdentifyingPassPtr InsertedPassID;
-  bool VerifyAfter;
 
-  InsertedPass(AnalysisID TargetPassID, IdentifyingPassPtr InsertedPassID,
-               bool VerifyAfter)
-      : TargetPassID(TargetPassID), InsertedPassID(InsertedPassID),
-        VerifyAfter(VerifyAfter) {}
+  InsertedPass(AnalysisID TargetPassID, IdentifyingPassPtr InsertedPassID)
+      : TargetPassID(TargetPassID), InsertedPassID(InsertedPassID) {}
 
   Pass *getInsertedPass() const {
     assert(InsertedPassID.isValid() && "Illegal Pass ID!");
@@ -493,6 +499,7 @@ CGPassBuilderOption llvm::getCGPassBuilderOption() {
   SET_BOOLEAN_OPTION(DisableConstantHoisting)
   SET_BOOLEAN_OPTION(DisableCGP)
   SET_BOOLEAN_OPTION(DisablePartialLibcallInlining)
+  SET_BOOLEAN_OPTION(DisableSelectOptimize)
   SET_BOOLEAN_OPTION(PrintLSR)
   SET_BOOLEAN_OPTION(PrintISelInput)
   SET_BOOLEAN_OPTION(PrintGCInfo)
@@ -641,14 +648,13 @@ CodeGenOpt::Level TargetPassConfig::getOptLevel() const {
 
 /// Insert InsertedPassID pass after TargetPassID.
 void TargetPassConfig::insertPass(AnalysisID TargetPassID,
-                                  IdentifyingPassPtr InsertedPassID,
-                                  bool VerifyAfter) {
+                                  IdentifyingPassPtr InsertedPassID) {
   assert(((!InsertedPassID.isInstance() &&
            TargetPassID != InsertedPassID.getID()) ||
           (InsertedPassID.isInstance() &&
            TargetPassID != InsertedPassID.getInstance()->getPassID())) &&
          "Insert a pass after itself!");
-  Impl->InsertedPasses.emplace_back(TargetPassID, InsertedPassID, VerifyAfter);
+  Impl->InsertedPasses.emplace_back(TargetPassID, InsertedPassID);
 }
 
 /// createPassConfig - Create a pass configuration object to be used by
@@ -726,7 +732,7 @@ bool TargetPassConfig::isPassSubstitutedOrOverridden(AnalysisID ID) const {
 /// a later pass or that it should stop after an earlier pass, then do not add
 /// the pass.  Finally, compare the current pass against the StartAfter
 /// and StopAfter options and change the Started/Stopped flags accordingly.
-void TargetPassConfig::addPass(Pass *P, bool verifyAfter) {
+void TargetPassConfig::addPass(Pass *P) {
   assert(!Initialized && "PassConfig is immutable");
 
   // Cache the Pass ID here in case the pass manager finds this pass is
@@ -740,21 +746,21 @@ void TargetPassConfig::addPass(Pass *P, bool verifyAfter) {
   if (StopBefore == PassID && StopBeforeCount++ == StopBeforeInstanceNum)
     Stopped = true;
   if (Started && !Stopped) {
-    if (AddingMachinePasses)
+    if (AddingMachinePasses) {
+      // Construct banner message before PM->add() as that may delete the pass.
+      std::string Banner =
+          std::string("After ") + std::string(P->getPassName());
       addMachinePrePasses();
-    std::string Banner;
-    // Construct banner message before PM->add() as that may delete the pass.
-    if (AddingMachinePasses && verifyAfter)
-      Banner = std::string("After ") + std::string(P->getPassName());
-    PM->add(P);
-    if (AddingMachinePasses)
-      addMachinePostPasses(Banner, /*AllowVerify*/ verifyAfter);
+      PM->add(P);
+      addMachinePostPasses(Banner);
+    } else {
+      PM->add(P);
+    }
 
     // Add the passes after the pass P if there is any.
-    for (const auto &IP : Impl->InsertedPasses) {
+    for (const auto &IP : Impl->InsertedPasses)
       if (IP.TargetPassID == PassID)
-        addPass(IP.getInsertedPass(), IP.VerifyAfter);
-    }
+        addPass(IP.getInsertedPass());
   } else {
     delete P;
   }
@@ -773,7 +779,7 @@ void TargetPassConfig::addPass(Pass *P, bool verifyAfter) {
 ///
 /// addPass cannot return a pointer to the pass instance because is internal the
 /// PassManager and the instance we create here may already be freed.
-AnalysisID TargetPassConfig::addPass(AnalysisID PassID, bool verifyAfter) {
+AnalysisID TargetPassConfig::addPass(AnalysisID PassID) {
   IdentifyingPassPtr TargetID = getPassSubstitution(PassID);
   IdentifyingPassPtr FinalPtr = overridePass(PassID, TargetID);
   if (!FinalPtr.isValid())
@@ -788,7 +794,7 @@ AnalysisID TargetPassConfig::addPass(AnalysisID PassID, bool verifyAfter) {
       llvm_unreachable("Pass ID not registered");
   }
   AnalysisID FinalID = P->getPassID();
-  addPass(P, verifyAfter); // Ends the lifetime of P.
+  addPass(P); // Ends the lifetime of P.
 
   return FinalID;
 }
@@ -832,8 +838,7 @@ void TargetPassConfig::addMachinePrePasses(bool AllowDebugify) {
     addDebugifyPass();
 }
 
-void TargetPassConfig::addMachinePostPasses(const std::string &Banner,
-                                            bool AllowVerify, bool AllowStrip) {
+void TargetPassConfig::addMachinePostPasses(const std::string &Banner) {
   if (DebugifyIsSafe) {
     if (DebugifyCheckAndStripAll == cl::BOU_TRUE) {
       addCheckDebugPass();
@@ -841,8 +846,7 @@ void TargetPassConfig::addMachinePostPasses(const std::string &Banner,
     } else if (DebugifyAndStripAll == cl::BOU_TRUE)
       addStripDebugPass();
   }
-  if (AllowVerify)
-    addVerifyPass(Banner);
+  addVerifyPass(Banner);
 }
 
 /// Add common target configurable passes that perform LLVM IR to IR transforms
@@ -901,6 +905,12 @@ void TargetPassConfig::addIRPasses() {
   addPass(&ShadowStackGCLoweringID);
   addPass(createLowerConstantIntrinsicsPass());
 
+  // For MachO, lower @llvm.global_dtors into @llvm_global_ctors with
+  // __cxa_atexit() calls to avoid emitting the deprecated __mod_term_func.
+  if (TM->getTargetTriple().isOSBinFormatMachO() &&
+      TM->Options.LowerGlobalDtorsViaCxaAtExit)
+    addPass(createLowerGlobalDtorsLegacyPass());
+
   // Make sure that no unreachable blocks are instruction selected.
   addPass(createUnreachableBlockEliminationPass());
 
@@ -928,6 +938,13 @@ void TargetPassConfig::addIRPasses() {
   // Allow disabling it for testing purposes.
   if (!DisableExpandReductions)
     addPass(createExpandReductionsPass());
+
+  if (getOptLevel() != CodeGenOpt::None)
+    addPass(createTLSVariableHoistPass());
+
+  // Convert conditional moves to conditional jumps when profitable.
+  if (getOptLevel() != CodeGenOpt::None && !DisableSelectOptimize)
+    addPass(createSelectOptimizePass());
 }
 
 /// Turn exception handling constructs into something the code generators can
@@ -1175,7 +1192,7 @@ void TargetPassConfig::addMachinePasses() {
   // Run post-ra passes.
   addPostRegAlloc();
 
-  addPass(&RemoveRedundantDebugValuesID, false);
+  addPass(&RemoveRedundantDebugValuesID);
 
   addPass(&FixupStatepointCallerSavedID);
 
@@ -1217,7 +1234,7 @@ void TargetPassConfig::addMachinePasses() {
   // GC
   if (addGCPasses()) {
     if (PrintGCInfo)
-      addPass(createGCInfoPrinter(dbgs()), false);
+      addPass(createGCInfoPrinter(dbgs()));
   }
 
   // Basic block placement.
@@ -1247,10 +1264,10 @@ void TargetPassConfig::addMachinePasses() {
 
   // FIXME: Some backends are incompatible with running the verifier after
   // addPreEmitPass.  Maybe only pass "false" here for those targets?
-  addPass(&FuncletLayoutID, false);
+  addPass(&FuncletLayoutID);
 
-  addPass(&StackMapLivenessID, false);
-  addPass(&LiveDebugValuesID, false);
+  addPass(&StackMapLivenessID);
+  addPass(&LiveDebugValuesID);
 
   if (TM->Options.EnableMachineOutliner && getOptLevel() != CodeGenOpt::None &&
       EnableMachineOutliner != RunOutliner::NeverOutline) {
@@ -1273,12 +1290,11 @@ void TargetPassConfig::addMachinePasses() {
     addPass(createMachineFunctionSplitterPass());
   }
 
+  if (!DisableCFIFixup && TM->Options.EnableCFIFixup)
+    addPass(createCFIFixup());
+
   // Add passes that directly emit MI after all other MI passes.
   addPreEmitPass2();
-
-  // Insert pseudo probe annotation for callsite profiling
-  if (TM->Options.PseudoProbeForProfiling)
-    addPass(createPseudoProbeInserter());
 
   AddingMachinePasses = false;
 }
@@ -1409,6 +1425,9 @@ bool TargetPassConfig::addRegAssignAndRewriteOptimized() {
   // Finally rewrite virtual registers.
   addPass(&VirtRegRewriterID);
 
+  // Regalloc scoring for ML-driven eviction - noop except when learning a new
+  // eviction policy.
+  addPass(createRegAllocScoringPass());
   return true;
 }
 
@@ -1421,8 +1440,8 @@ bool TargetPassConfig::usingDefaultRegAlloc() const {
 /// Add the minimum set of target-independent passes that are required for
 /// register allocation. No coalescing or scheduling.
 void TargetPassConfig::addFastRegAlloc() {
-  addPass(&PHIEliminationID, false);
-  addPass(&TwoAddressInstructionPassID, false);
+  addPass(&PHIEliminationID);
+  addPass(&TwoAddressInstructionPassID);
 
   addRegAssignAndRewriteFast();
 }
@@ -1431,9 +1450,9 @@ void TargetPassConfig::addFastRegAlloc() {
 /// optimized register allocation, including coalescing, machine instruction
 /// scheduling, and register allocation itself.
 void TargetPassConfig::addOptimizedRegAlloc() {
-  addPass(&DetectDeadLanesID, false);
+  addPass(&DetectDeadLanesID);
 
-  addPass(&ProcessImplicitDefsID, false);
+  addPass(&ProcessImplicitDefsID);
 
   // LiveVariables currently requires pure SSA form.
   //
@@ -1445,18 +1464,18 @@ void TargetPassConfig::addOptimizedRegAlloc() {
   // When LiveVariables is removed this has to be removed/moved either.
   // Explicit addition of UnreachableMachineBlockElim allows stopping before or
   // after it with -stop-before/-stop-after.
-  addPass(&UnreachableMachineBlockElimID, false);
-  addPass(&LiveVariablesID, false);
+  addPass(&UnreachableMachineBlockElimID);
+  addPass(&LiveVariablesID);
 
   // Edge splitting is smarter with machine loop info.
-  addPass(&MachineLoopInfoID, false);
-  addPass(&PHIEliminationID, false);
+  addPass(&MachineLoopInfoID);
+  addPass(&PHIEliminationID);
 
   // Eventually, we want to run LiveIntervals before PHI elimination.
   if (EarlyLiveIntervals)
-    addPass(&LiveIntervalsID, false);
+    addPass(&LiveIntervalsID);
 
-  addPass(&TwoAddressInstructionPassID, false);
+  addPass(&TwoAddressInstructionPassID);
   addPass(&RegisterCoalescerID);
 
   // The machine scheduler may accidentally create disconnected components
@@ -1469,9 +1488,6 @@ void TargetPassConfig::addOptimizedRegAlloc() {
 
   if (addRegAssignAndRewriteOptimized()) {
     // Perform stack slot coloring and post-ra machine LICM.
-    //
-    // FIXME: Re-enable coloring with register when it's capable of adding
-    // kill markers.
     addPass(&StackSlotColoringID);
 
     // Allow targets to expand pseudo instructions depending on the choice of
@@ -1511,7 +1527,7 @@ void TargetPassConfig::addMachineLateOptimization() {
 
 /// Add standard GC passes.
 bool TargetPassConfig::addGCPasses() {
-  addPass(&GCMachineCodeAnalysisID, false);
+  addPass(&GCMachineCodeAnalysisID);
   return true;
 }
 

@@ -1,21 +1,15 @@
 // RUN: mlir-opt -allow-unregistered-dialect %s | FileCheck %s
 
 module attributes {luminous.container_module} {
+  // CHECK-LABEL: luminous.module @kernels
   luminous.module @kernels {
-    luminous.func @kernel_1(%arg0: memref<?xf32, 1>) {
-      luminous.return
-    }
-    luminous.func @kernel_2(%arg0: f32, %arg1: memref<?xf32, 1>) {
+    luminous.func @kernel (%arg0: memref<1024xf32>, %arg1: memref<2048xf32>) {
       luminous.return
     }
   }
 
-  func @function(%arg0 : f32, %arg1 : memref<?xf32, 1>) {
-    %c64 = constant 64 : index
-    %c128 = constant 128 : index
-    %t0 = luminous.dispatch @kernels::@kernel_1 <%c64,%c128> (%arg1 : memref<?xf32, 1>)
-    %t1 = luminous.dispatch [%t0] @kernels::@kernel_2 <%c64,%c128> (%arg0 : f32, %arg1 : memref<?xf32, 1>)
-    luminous.wait [%t1]
+  func.func @f(%arg0: memref<1024xf32>, %arg1: memref<2048xf32>) {
+    %t0 = luminous.dispatch @kernels::@kernel(%arg0: memref<1024xf32>, %arg1: memref<2048xf32>)
     return
   }
 }

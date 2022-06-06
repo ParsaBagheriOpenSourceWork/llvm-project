@@ -979,25 +979,24 @@ failure:
   unreachable
 }
 
-; TODO: We can break the backedge here.
 define i32 @test_select_const(i32 %x) {
 ; CHECK-LABEL: @test_select_const(
 ; CHECK-NEXT:  entry:
 ; CHECK-NEXT:    br label [[LOOP:%.*]]
 ; CHECK:       loop:
-; CHECK-NEXT:    [[SUM:%.*]] = phi i32 [ 0, [[ENTRY:%.*]] ], [ [[SUM_NEXT:%.*]], [[BACKEDGE:%.*]] ]
+; CHECK-NEXT:    [[SUM:%.*]] = phi i32 [ 0, [[ENTRY:%.*]] ]
 ; CHECK-NEXT:    [[SUB:%.*]] = sub i32 4, [[SUM]]
 ; CHECK-NEXT:    [[IS_POSITIVE:%.*]] = icmp sgt i32 [[SUB]], 0
 ; CHECK-NEXT:    [[SEL:%.*]] = select i1 [[IS_POSITIVE]], i32 [[SUB]], i32 [[X:%.*]]
 ; CHECK-NEXT:    [[SEL_COND:%.*]] = icmp sgt i32 [[SEL]], 0
-; CHECK-NEXT:    br i1 [[SEL_COND]], label [[BACKEDGE]], label [[IF_FALSE:%.*]]
+; CHECK-NEXT:    br i1 [[SEL_COND]], label [[BACKEDGE:%.*]], label [[IF_FALSE:%.*]]
 ; CHECK:       if.false:
 ; CHECK-NEXT:    br label [[BACKEDGE]]
 ; CHECK:       backedge:
 ; CHECK-NEXT:    [[MERGE_PHI:%.*]] = phi i32 [ 0, [[IF_FALSE]] ], [ [[SUB]], [[LOOP]] ]
-; CHECK-NEXT:    [[SUM_NEXT]] = add i32 [[SUM]], [[MERGE_PHI]]
+; CHECK-NEXT:    [[SUM_NEXT:%.*]] = add i32 [[SUM]], [[MERGE_PHI]]
 ; CHECK-NEXT:    [[LOOP_COND:%.*]] = icmp ne i32 [[SUM_NEXT]], 4
-; CHECK-NEXT:    br i1 [[LOOP_COND]], label [[LOOP]], label [[DONE:%.*]]
+; CHECK-NEXT:    br label [[DONE:%.*]]
 ; CHECK:       done:
 ; CHECK-NEXT:    [[SUM_NEXT_LCSSA:%.*]] = phi i32 [ [[SUM_NEXT]], [[BACKEDGE]] ]
 ; CHECK-NEXT:    ret i32 [[SUM_NEXT_LCSSA]]
@@ -1214,4 +1213,27 @@ backedge:                                         ; preds = %first_block, %defau
 done:                                             ; preds = %backedge
   %sum.next.lcssa = phi i32 [ %sum.next, %backedge ]
   ret i32 %sum.next.lcssa
+}
+
+@g = external global i32
+
+define void @ptr54615(i32* byval(i32) %arg) {
+; CHECK-LABEL: @ptr54615(
+; CHECK-NEXT:    br label [[FOR_COND:%.*]]
+; CHECK:       for.cond:
+; CHECK-NEXT:    [[CAST:%.*]] = bitcast i32* @g to i32*
+; CHECK-NEXT:    [[CMP:%.*]] = icmp eq i32* [[CAST]], [[ARG:%.*]]
+; CHECK-NEXT:    br i1 [[CMP]], label [[FOR_END:%.*]], label [[FOR_COND]]
+; CHECK:       for.end:
+; CHECK-NEXT:    ret void
+;
+  br label %for.cond
+
+for.cond:
+  %cast = bitcast i32* @g to i32*
+  %cmp = icmp eq i32* %cast, %arg
+  br i1 %cmp, label %for.end, label %for.cond
+
+for.end:
+  ret void
 }

@@ -16,7 +16,7 @@
 #include "llvm/CodeGen/TargetPassConfig.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
-#include "llvm/Support/TargetRegistry.h"
+#include "llvm/MC/TargetRegistry.h"
 
 #include "AVR.h"
 #include "AVRTargetObjectFile.h"
@@ -70,7 +70,6 @@ public:
   bool addInstSelector() override;
   void addPreSched2() override;
   void addPreEmitPass() override;
-  void addPreRegAlloc() override;
 };
 } // namespace
 
@@ -93,7 +92,6 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeAVRTarget() {
 
   auto &PR = *PassRegistry::getPassRegistry();
   initializeAVRExpandPseudoPass(PR);
-  initializeAVRRelaxMemPass(PR);
   initializeAVRShiftExpandPass(PR);
 }
 
@@ -118,13 +116,7 @@ bool AVRPassConfig::addInstSelector() {
   return false;
 }
 
-void AVRPassConfig::addPreRegAlloc() {
-  // Create the dynalloc SP save/restore pass to handle variable sized allocas.
-  addPass(createAVRDynAllocaSRPass());
-}
-
 void AVRPassConfig::addPreSched2() {
-  addPass(createAVRRelaxMemPass());
   addPass(createAVRExpandPseudoPass());
 }
 

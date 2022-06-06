@@ -200,24 +200,17 @@ REGISTER_TRAIT_WITH_PROGRAMSTATE(ObjectsUnderConstruction,
 static const char* TagProviderName = "ExprEngine";
 
 ExprEngine::ExprEngine(cross_tu::CrossTranslationUnitContext &CTU,
-                       AnalysisManager &mgr,
-                       SetOfConstDecls *VisitedCalleesIn,
-                       FunctionSummariesTy *FS,
-                       InliningModes HowToInlineIn)
-    : CTU(CTU), AMgr(mgr),
-      AnalysisDeclContexts(mgr.getAnalysisDeclContextManager()),
+                       AnalysisManager &mgr, SetOfConstDecls *VisitedCalleesIn,
+                       FunctionSummariesTy *FS, InliningModes HowToInlineIn)
+    : CTU(CTU), IsCTUEnabled(mgr.getAnalyzerOptions().IsNaiveCTUEnabled),
+      AMgr(mgr), AnalysisDeclContexts(mgr.getAnalysisDeclContextManager()),
       Engine(*this, FS, mgr.getAnalyzerOptions()), G(Engine.getGraph()),
       StateMgr(getContext(), mgr.getStoreManagerCreator(),
-               mgr.getConstraintManagerCreator(), G.getAllocator(),
-               this),
-      SymMgr(StateMgr.getSymbolManager()),
-      MRMgr(StateMgr.getRegionManager()),
-      svalBuilder(StateMgr.getSValBuilder()),
-      ObjCNoRet(mgr.getASTContext()),
-      BR(mgr, *this),
-      VisitedCallees(VisitedCalleesIn),
-      HowToInline(HowToInlineIn)
-  {
+               mgr.getConstraintManagerCreator(), G.getAllocator(), this),
+      SymMgr(StateMgr.getSymbolManager()), MRMgr(StateMgr.getRegionManager()),
+      svalBuilder(StateMgr.getSValBuilder()), ObjCNoRet(mgr.getASTContext()),
+      BR(mgr, *this), VisitedCallees(VisitedCalleesIn),
+      HowToInline(HowToInlineIn) {
   unsigned TrimInterval = mgr.options.GraphTrimInterval;
   if (TrimInterval != 0) {
     // Enable eager node reclamation when constructing the ExplodedGraph.
@@ -326,8 +319,8 @@ ProgramStateRef ExprEngine::createTemporaryRegionIfNeeded(
     }
     Result = InitWithAdjustments;
   } else {
-    // We need to create a region no matter what. For sanity, make sure we don't
-    // try to stuff a Loc into a non-pointer temporary region.
+    // We need to create a region no matter what. Make sure we don't try to
+    // stuff a Loc into a non-pointer temporary region.
     assert(!InitValWithAdjustments.getAs<Loc>() ||
            Loc::isLocType(Result->getType()) ||
            Result->getType()->isMemberPointerType());
@@ -393,8 +386,7 @@ ProgramStateRef ExprEngine::createTemporaryRegionIfNeeded(
   SVal BaseReg = Reg;
 
   // Make the necessary adjustments to obtain the sub-object.
-  for (auto I = Adjustments.rbegin(), E = Adjustments.rend(); I != E; ++I) {
-    const SubobjectAdjustment &Adj = *I;
+  for (const SubobjectAdjustment &Adj : llvm::reverse(Adjustments)) {
     switch (Adj.Kind) {
     case SubobjectAdjustment::DerivedToBaseAdjustment:
       Reg = StoreMgr.evalDerivedToBase(Reg, Adj.DerivedToBase.BasePath);
@@ -1297,6 +1289,11 @@ void ExprEngine::Visit(const Stmt *S, ExplodedNode *Pred,
     case Stmt::OMPInteropDirectiveClass:
     case Stmt::OMPDispatchDirectiveClass:
     case Stmt::OMPMaskedDirectiveClass:
+    case Stmt::OMPGenericLoopDirectiveClass:
+    case Stmt::OMPTeamsGenericLoopDirectiveClass:
+    case Stmt::OMPTargetTeamsGenericLoopDirectiveClass:
+    case Stmt::OMPParallelGenericLoopDirectiveClass:
+    case Stmt::OMPTargetParallelGenericLoopDirectiveClass:
     case Stmt::CapturedStmtClass:
     case Stmt::OMPUnrollDirectiveClass:
     case Stmt::OMPMetaDirectiveClass: {
@@ -1342,8 +1339,9 @@ void ExprEngine::Visit(const Stmt *S, ExplodedNode *Pred,
     case Stmt::GNUNullExprClass: {
       // GNU __null is a pointer-width integer, not an actual pointer.
       ProgramStateRef state = Pred->getState();
-      state = state->BindExpr(S, Pred->getLocationContext(),
-                              svalBuilder.makeIntValWithPtrWidth(0, false));
+      state = state->BindExpr(
+          S, Pred->getLocationContext(),
+          svalBuilder.makeIntValWithWidth(getContext().VoidPtrTy, 0));
       Bldr.generateNode(S, Pred, state);
       break;
     }
@@ -1989,8 +1987,7 @@ void ExprEngine::processCFGBlockEntrance(const BlockEdge &L,
   if (BlockCount == AMgr.options.maxBlockVisitOnPath - 1 &&
       AMgr.options.ShouldWidenLoops) {
     const Stmt *Term = nodeBuilder.getContext().getBlock()->getTerminatorStmt();
-    if (!(Term &&
-          (isa<ForStmt>(Term) || isa<WhileStmt>(Term) || isa<DoStmt>(Term))))
+    if (!isa_and_nonnull<ForStmt, WhileStmt, DoStmt>(Term))
       return;
     // Widen.
     const LocationContext *LCtx = Pred->getLocationContext();
@@ -2266,7 +2263,7 @@ void ExprEngine::processBranch(const Stmt *Condition,
       continue;
     }
     if (StTrue && StFalse)
-      assert(!isa<ObjCForCollectionStmt>(Condition));;
+      assert(!isa<ObjCForCollectionStmt>(Condition));
 
     // Process the true branch.
     if (builder.isFeasible(true)) {
@@ -2594,7 +2591,7 @@ void ExprEngine::VisitCommonDeclRefExpr(const Expr *Ex, const NamedDecl *D,
                       ProgramPoint::PostLValueKind);
     return;
   }
-  if (isa<FieldDecl>(D) || isa<IndirectFieldDecl>(D)) {
+  if (isa<FieldDecl, IndirectFieldDecl>(D)) {
     // Delegate all work related to pointer to members to the surrounding
     // operator&.
     return;
@@ -2671,7 +2668,7 @@ void ExprEngine::VisitMemberExpr(const MemberExpr *M, ExplodedNode *Pred,
 
   // Handle static member variables and enum constants accessed via
   // member syntax.
-  if (isa<VarDecl>(Member) || isa<EnumConstantDecl>(Member)) {
+  if (isa<VarDecl, EnumConstantDecl>(Member)) {
     for (const auto I : CheckedSet)
       VisitCommonDeclRefExpr(M, Member, I, EvalSet);
   } else {
@@ -3115,7 +3112,6 @@ void ExprEngine::VisitMSAsmStmt(const MSAsmStmt *A, ExplodedNode *Pred,
 // Visualization.
 //===----------------------------------------------------------------------===//
 
-#ifndef NDEBUG
 namespace llvm {
 
 template<>
@@ -3213,29 +3209,18 @@ struct DOTGraphTraits<ExplodedGraph*> : public DefaultDOTGraphTraits {
 };
 
 } // namespace llvm
-#endif
 
 void ExprEngine::ViewGraph(bool trim) {
-#ifndef NDEBUG
   std::string Filename = DumpGraph(trim);
   llvm::DisplayGraph(Filename, false, llvm::GraphProgram::DOT);
-#else
-  llvm::errs() << "Warning: viewing graph requires assertions" << "\n";
-#endif
 }
 
-
-void ExprEngine::ViewGraph(ArrayRef<const ExplodedNode*> Nodes) {
-#ifndef NDEBUG
+void ExprEngine::ViewGraph(ArrayRef<const ExplodedNode *> Nodes) {
   std::string Filename = DumpGraph(Nodes);
   llvm::DisplayGraph(Filename, false, llvm::GraphProgram::DOT);
-#else
-  llvm::errs() << "Warning: viewing graph requires assertions" << "\n";
-#endif
 }
 
 std::string ExprEngine::DumpGraph(bool trim, StringRef Filename) {
-#ifndef NDEBUG
   if (trim) {
     std::vector<const ExplodedNode *> Src;
 
@@ -3250,35 +3235,26 @@ std::string ExprEngine::DumpGraph(bool trim, StringRef Filename) {
       Src.push_back(N);
     }
     return DumpGraph(Src, Filename);
-  } else {
-    return llvm::WriteGraph(&G, "ExprEngine", /*ShortNames=*/false,
-                            /*Title=*/"Exploded Graph",
-                            /*Filename=*/std::string(Filename));
   }
-#else
-  llvm::errs() << "Warning: dumping graph requires assertions" << "\n";
-  return "";
-#endif
+
+  return llvm::WriteGraph(&G, "ExprEngine", /*ShortNames=*/false,
+                          /*Title=*/"Exploded Graph",
+                          /*Filename=*/std::string(Filename));
 }
 
-std::string ExprEngine::DumpGraph(ArrayRef<const ExplodedNode*> Nodes,
+std::string ExprEngine::DumpGraph(ArrayRef<const ExplodedNode *> Nodes,
                                   StringRef Filename) {
-#ifndef NDEBUG
   std::unique_ptr<ExplodedGraph> TrimmedG(G.trim(Nodes));
 
   if (!TrimmedG.get()) {
     llvm::errs() << "warning: Trimmed ExplodedGraph is empty.\n";
     return "";
-  } else {
-    return llvm::WriteGraph(TrimmedG.get(), "TrimmedExprEngine",
-                            /*ShortNames=*/false,
-                            /*Title=*/"Trimmed Exploded Graph",
-                            /*Filename=*/std::string(Filename));
   }
-#else
-  llvm::errs() << "Warning: dumping graph requires assertions" << "\n";
-  return "";
-#endif
+
+  return llvm::WriteGraph(TrimmedG.get(), "TrimmedExprEngine",
+                          /*ShortNames=*/false,
+                          /*Title=*/"Trimmed Exploded Graph",
+                          /*Filename=*/std::string(Filename));
 }
 
 void *ProgramStateTrait<ReplayWithoutInlining>::GDMIndex() {

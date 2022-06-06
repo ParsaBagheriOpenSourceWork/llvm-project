@@ -39,6 +39,7 @@ endif()
 add_clang_library(clangBasic
   Attributes.cpp
   Builtins.cpp
+  CLWarnings.cpp
   CharInfo.cpp
   CodeGenOptions.cpp
   Cuda.cpp
@@ -74,6 +75,8 @@ add_clang_library(clangBasic
   Targets/ARM.cpp
   Targets/AVR.cpp
   Targets/BPF.cpp
+  Targets/CSKY.cpp
+  Targets/DirectX.cpp
   Targets/Hexagon.cpp
   Targets/Lanai.cpp
   Targets/Le64.cpp

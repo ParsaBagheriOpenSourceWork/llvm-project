@@ -78,6 +78,7 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/Regex.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <cassert>
@@ -280,7 +281,7 @@ static void updateLoopCountStatistic(ScopDetection::LoopStats Stats,
 
 namespace {
 
-class DiagnosticScopFound : public DiagnosticInfo {
+class DiagnosticScopFound final : public DiagnosticInfo {
 private:
   static int PluginDiagnosticKind;
 
@@ -329,18 +330,20 @@ static bool doesStringMatchAnyRegex(StringRef Str,
 
     std::string Err;
     if (!R.isValid(Err))
-      report_fatal_error("invalid regex given as input to polly: " + Err, true);
+      report_fatal_error(Twine("invalid regex given as input to polly: ") + Err,
+                         true);
 
     if (R.match(Str))
       return true;
   }
   return false;
 }
+
 //===----------------------------------------------------------------------===//
 // ScopDetection.
 
 ScopDetection::ScopDetection(const DominatorTree &DT, ScalarEvolution &SE,
-                             LoopInfo &LI, RegionInfo &RI, AliasAnalysis &AA,
+                             LoopInfo &LI, RegionInfo &RI, AAResults &AA,
                              OptimizationRemarkEmitter &ORE)
     : DT(DT), SE(SE), LI(LI), RI(RI), AA(AA), ORE(ORE) {}
 
@@ -728,7 +731,7 @@ bool ScopDetection::isValidCallInst(CallInst &CI,
     case FMRB_OnlyReadsArgumentPointees:
     case FMRB_OnlyAccessesArgumentPointees:
     case FMRB_OnlyWritesArgumentPointees:
-      for (const auto &Arg : CI.arg_operands()) {
+      for (const auto &Arg : CI.args()) {
         if (!Arg->getType()->isPointerTy())
           continue;
 
@@ -847,7 +850,7 @@ namespace {
 /// always add and verify the assumption that for all subscript expressions
 /// 'exp' the inequality 0 <= exp < size holds. Hence, we will also verify
 /// that 0 <= size, which means smax(0, size) == size.
-class SCEVRemoveMax : public SCEVRewriteVisitor<SCEVRemoveMax> {
+class SCEVRemoveMax final : public SCEVRewriteVisitor<SCEVRemoveMax> {
 public:
   SCEVRemoveMax(ScalarEvolution &SE, std::vector<const SCEV *> *Terms)
       : SCEVRewriteVisitor(SE), Terms(Terms) {}
@@ -1134,7 +1137,7 @@ bool ScopDetection::isValidAccess(Instruction *Inst, const SCEV *AF,
   } else if (PollyDelinearize && !IsVariantInNonAffineLoop) {
     Context.Accesses[BP].push_back({Inst, AF});
 
-    if (!IsAffine || hasIVParams(AF))
+    if (!IsAffine)
       Context.NonAffineAccesses.insert(
           std::make_pair(BP, LI.getLoopFor(Inst->getParent())));
   } else if (!AllowNonAffine && !IsAffine) {
@@ -1165,7 +1168,7 @@ bool ScopDetection::isValidAccess(Instruction *Inst, const SCEV *AF,
       // as invariant, we use fixed-point iteration method here i.e we iterate
       // over the alias set for arbitrary number of times until it is safe to
       // assume that all the invariant loads have been detected
-      while (1) {
+      while (true) {
         const unsigned int VariantSize = VariantLS.size(),
                            InvariantSize = InvariantLS.size();
 
@@ -1469,7 +1472,7 @@ bool ScopDetection::isErrorBlock(llvm::BasicBlock &BB, const llvm::Region &R) {
   if (!PollyAllowErrorBlocks)
     return false;
 
-  auto It = ErrorBlockCache.insert({{&BB, &R}, false});
+  auto It = ErrorBlockCache.insert({std::make_pair(&BB, &R), false});
   if (!It.second)
     return It.first->getSecond();
 
@@ -1757,6 +1760,13 @@ bool ScopDetection::isValidRegion(DetectionContext &Context) {
     return false;
   }
 
+  for (BasicBlock *Pred : predecessors(CurRegion.getEntry())) {
+    Instruction *PredTerm = Pred->getTerminator();
+    if (isa<IndirectBrInst>(PredTerm) || isa<CallBrInst>(PredTerm))
+      return invalid<ReportIndirectPredecessor>(
+          Context, /*Assert=*/true, PredTerm, PredTerm->getDebugLoc());
+  }
+
   // SCoP cannot contain the entry block of the function, because we need
   // to insert alloca instruction there when translate scalar to array.
   if (!PollyAllowFullFunction &&
@@ -2033,3 +2043,50 @@ INITIALIZE_PASS_DEPENDENCY(ScalarEvolutionWrapperPass);
 INITIALIZE_PASS_DEPENDENCY(OptimizationRemarkEmitterWrapperPass);
 INITIALIZE_PASS_END(ScopDetectionWrapperPass, "polly-detect",
                     "Polly - Detect static control parts (SCoPs)", false, false)
+
+//===----------------------------------------------------------------------===//
+
+namespace {
+/// Print result from ScopDetectionWrapperPass.
+class ScopDetectionPrinterLegacyPass final : public FunctionPass {
+public:
+  static char ID;
+
+  ScopDetectionPrinterLegacyPass() : ScopDetectionPrinterLegacyPass(outs()) {}
+
+  explicit ScopDetectionPrinterLegacyPass(llvm::raw_ostream &OS)
+      : FunctionPass(ID), OS(OS) {}
+
+  bool runOnFunction(Function &F) override {
+    ScopDetectionWrapperPass &P = getAnalysis<ScopDetectionWrapperPass>();
+
+    OS << "Printing analysis '" << P.getPassName() << "' for function '"
+       << F.getName() << "':\n";
+    P.print(OS);
+
+    return false;
+  }
+
+  void getAnalysisUsage(AnalysisUsage &AU) const override {
+    FunctionPass::getAnalysisUsage(AU);
+    AU.addRequired<ScopDetectionWrapperPass>();
+    AU.setPreservesAll();
+  }
+
+private:
+  llvm::raw_ostream &OS;
+};
+
+char ScopDetectionPrinterLegacyPass::ID = 0;
+} // namespace
+
+Pass *polly::createScopDetectionPrinterLegacyPass(raw_ostream &OS) {
+  return new ScopDetectionPrinterLegacyPass(OS);
+}
+
+INITIALIZE_PASS_BEGIN(ScopDetectionPrinterLegacyPass, "polly-print-detect",
+                      "Polly - Print static control parts (SCoPs)", false,
+                      false);
+INITIALIZE_PASS_DEPENDENCY(ScopDetectionWrapperPass);
+INITIALIZE_PASS_END(ScopDetectionPrinterLegacyPass, "polly-print-detect",
+                    "Polly - Print static control parts (SCoPs)", false, false)

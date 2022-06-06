@@ -15,11 +15,9 @@
 #include "SelectionDAGBuilder.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/None.h"
 #include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallPtrSet.h"
-#include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/StringRef.h"
@@ -29,10 +27,12 @@
 #include "llvm/Analysis/EHPersonalities.h"
 #include "llvm/Analysis/LazyBlockFrequencyInfo.h"
 #include "llvm/Analysis/LegacyDivergenceAnalysis.h"
+#include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/Analysis/ProfileSummaryInfo.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
+#include "llvm/CodeGen/CodeGenCommonISel.h"
 #include "llvm/CodeGen/FastISel.h"
 #include "llvm/CodeGen/FunctionLoweringInfo.h"
 #include "llvm/CodeGen/GCMetadata.h"
@@ -68,7 +68,6 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/InstIterator.h"
-#include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
@@ -81,7 +80,6 @@
 #include "llvm/IR/Value.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/MC/MCInstrDesc.h"
-#include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/BranchProbability.h"
 #include "llvm/Support/Casting.h"
@@ -296,7 +294,7 @@ TargetLowering::EmitInstrWithCustomInserter(MachineInstr &MI,
 #ifndef NDEBUG
   dbgs() << "If a target marks an instruction with "
           "'usesCustomInserter', it must implement "
-          "TargetLowering::EmitInstrWithCustomInserter!";
+          "TargetLowering::EmitInstrWithCustomInserter!\n";
 #endif
   llvm_unreachable(nullptr);
 }
@@ -318,7 +316,7 @@ SelectionDAGISel::SelectionDAGISel(TargetMachine &tm, CodeGenOpt::Level OL)
       CurDAG(new SelectionDAG(tm, OL)),
       SDB(std::make_unique<SelectionDAGBuilder>(*CurDAG, *FuncInfo, *SwiftError,
                                                 OL)),
-      AA(), GFI(), OptLevel(OL), DAGSize(0) {
+      OptLevel(OL) {
   initializeGCModuleInfoPass(*PassRegistry::getPassRegistry());
   initializeBranchProbabilityInfoWrapperPassPass(
       *PassRegistry::getPassRegistry());
@@ -423,6 +421,11 @@ bool SelectionDAGISel::runOnMachineFunction(MachineFunction &mf) {
 
   const Function &Fn = mf.getFunction();
   MF = &mf;
+
+  // Decide what flavour of variable location debug-info will be used, before
+  // we change the optimisation level.
+  UseInstrRefDebugInfo = mf.useDebugInstrRef();
+  CurDAG->useInstrRefDebugInfo(UseInstrRefDebugInfo);
 
   // Reset the target options before resetting the optimization
   // level below.
@@ -653,7 +656,8 @@ bool SelectionDAGISel::runOnMachineFunction(MachineFunction &mf) {
 
   // For debug-info, in instruction referencing mode, we need to perform some
   // post-isel maintenence.
-  MF->finalizeDebugInstrRefs();
+  if (UseInstrRefDebugInfo)
+    MF->finalizeDebugInstrRefs();
 
   // Determine if there are any calls in this machine function.
   MachineFrameInfo &MFI = MF->getFrameInfo();
@@ -699,9 +703,10 @@ static void reportFastISelFailure(MachineFunction &MF,
     R << (" (in function: " + MF.getName() + ")").str();
 
   if (ShouldAbort)
-    report_fatal_error(R.getMsg());
+    report_fatal_error(Twine(R.getMsg()));
 
   ORE.emit(R);
+  LLVM_DEBUG(dbgs() << R.getMsg() << "\n");
 }
 
 void SelectionDAGISel::SelectBasicBlock(BasicBlock::const_iterator Begin,
@@ -1379,6 +1384,8 @@ void SelectionDAGISel::SelectAllBasicBlocks(const Function &Fn) {
   if (TM.Options.EnableFastISel) {
     LLVM_DEBUG(dbgs() << "Enabling fast-isel\n");
     FastIS = TLI->createFastISel(*FuncInfo, LibInfo);
+    if (FastIS)
+      FastIS->useInstrRefDebugInfo(UseInstrRefDebugInfo);
   }
 
   ReversePostOrderTraversal<const Function*> RPOT(&Fn);
@@ -1518,6 +1525,8 @@ void SelectionDAGISel::SelectAllBasicBlocks(const Function &Fn) {
               BeforeInst->hasOneUse() &&
               FastIS->tryToFoldLoad(cast<LoadInst>(BeforeInst), Inst)) {
             // If we succeeded, don't re-select the load.
+            LLVM_DEBUG(dbgs()
+                       << "FastISel folded load: " << *BeforeInst << "\n");
             BI = std::next(BasicBlock::const_iterator(BeforeInst));
             --NumFastIselRemaining;
             ++NumFastIselSuccess;
@@ -1647,114 +1656,6 @@ void SelectionDAGISel::SelectAllBasicBlocks(const Function &Fn) {
   SDB->SPDescriptor.resetPerFunctionState();
 }
 
-/// Given that the input MI is before a partial terminator sequence TSeq, return
-/// true if M + TSeq also a partial terminator sequence.
-///
-/// A Terminator sequence is a sequence of MachineInstrs which at this point in
-/// lowering copy vregs into physical registers, which are then passed into
-/// terminator instructors so we can satisfy ABI constraints. A partial
-/// terminator sequence is an improper subset of a terminator sequence (i.e. it
-/// may be the whole terminator sequence).
-static bool MIIsInTerminatorSequence(const MachineInstr &MI) {
-  // If we do not have a copy or an implicit def, we return true if and only if
-  // MI is a debug value.
-  if (!MI.isCopy() && !MI.isImplicitDef())
-    // Sometimes DBG_VALUE MI sneak in between the copies from the vregs to the
-    // physical registers if there is debug info associated with the terminator
-    // of our mbb. We want to include said debug info in our terminator
-    // sequence, so we return true in that case.
-    return MI.isDebugInstr();
-
-  // We have left the terminator sequence if we are not doing one of the
-  // following:
-  //
-  // 1. Copying a vreg into a physical register.
-  // 2. Copying a vreg into a vreg.
-  // 3. Defining a register via an implicit def.
-
-  // OPI should always be a register definition...
-  MachineInstr::const_mop_iterator OPI = MI.operands_begin();
-  if (!OPI->isReg() || !OPI->isDef())
-    return false;
-
-  // Defining any register via an implicit def is always ok.
-  if (MI.isImplicitDef())
-    return true;
-
-  // Grab the copy source...
-  MachineInstr::const_mop_iterator OPI2 = OPI;
-  ++OPI2;
-  assert(OPI2 != MI.operands_end()
-         && "Should have a copy implying we should have 2 arguments.");
-
-  // Make sure that the copy dest is not a vreg when the copy source is a
-  // physical register.
-  if (!OPI2->isReg() || (!Register::isPhysicalRegister(OPI->getReg()) &&
-                         Register::isPhysicalRegister(OPI2->getReg())))
-    return false;
-
-  return true;
-}
-
-/// Find the split point at which to splice the end of BB into its success stack
-/// protector check machine basic block.
-///
-/// On many platforms, due to ABI constraints, terminators, even before register
-/// allocation, use physical registers. This creates an issue for us since
-/// physical registers at this point can not travel across basic
-/// blocks. Luckily, selectiondag always moves physical registers into vregs
-/// when they enter functions and moves them through a sequence of copies back
-/// into the physical registers right before the terminator creating a
-/// ``Terminator Sequence''. This function is searching for the beginning of the
-/// terminator sequence so that we can ensure that we splice off not just the
-/// terminator, but additionally the copies that move the vregs into the
-/// physical registers.
-static MachineBasicBlock::iterator
-FindSplitPointForStackProtector(MachineBasicBlock *BB,
-                                const TargetInstrInfo &TII) {
-  MachineBasicBlock::iterator SplitPoint = BB->getFirstTerminator();
-  if (SplitPoint == BB->begin())
-    return SplitPoint;
-
-  MachineBasicBlock::iterator Start = BB->begin();
-  MachineBasicBlock::iterator Previous = SplitPoint;
-  --Previous;
-
-  if (TII.isTailCall(*SplitPoint) &&
-      Previous->getOpcode() == TII.getCallFrameDestroyOpcode()) {
-    // call itself, then we must insert before the sequence even starts. For
-    // example:
-    //     <split point>
-    //     ADJCALLSTACKDOWN ...
-    //     <Moves>
-    //     ADJCALLSTACKUP ...
-    //     TAILJMP somewhere
-    // On the other hand, it could be an unrelated call in which case this tail call
-    // has to register moves of its own and should be the split point. For example:
-    //     ADJCALLSTACKDOWN
-    //     CALL something_else
-    //     ADJCALLSTACKUP
-    //     <split point>
-    //     TAILJMP somewhere
-    do {
-      --Previous;
-      if (Previous->isCall())
-        return SplitPoint;
-    } while(Previous->getOpcode() != TII.getCallFrameSetupOpcode());
-
-    return Previous;
-  }
-
-  while (MIIsInTerminatorSequence(*Previous)) {
-    SplitPoint = Previous;
-    if (Previous == Start)
-      break;
-    --Previous;
-  }
-
-  return SplitPoint;
-}
-
 void
 SelectionDAGISel::FinishBasicBlock() {
   LLVM_DEBUG(dbgs() << "Total amount of phi nodes to update: "
@@ -1784,7 +1685,7 @@ SelectionDAGISel::FinishBasicBlock() {
     // Add load and check to the basicblock.
     FuncInfo->MBB = ParentMBB;
     FuncInfo->InsertPt =
-        FindSplitPointForStackProtector(ParentMBB, *TII);
+        findSplitPointForStackProtector(ParentMBB, *TII);
     SDB->visitSPDescriptorParent(SDB->SPDescriptor, ParentMBB);
     CurDAG->setRoot(SDB->getRoot());
     SDB->clear();
@@ -1803,7 +1704,7 @@ SelectionDAGISel::FinishBasicBlock() {
     // register allocation issues caused by us splitting the parent mbb. The
     // register allocator will clean up said virtual copies later on.
     MachineBasicBlock::iterator SplitPoint =
-        FindSplitPointForStackProtector(ParentMBB, *TII);
+        findSplitPointForStackProtector(ParentMBB, *TII);
 
     // Splice the terminator of ParentMBB into SuccessMBB.
     SuccessMBB->splice(SuccessMBB->end(), ParentMBB,
@@ -1891,27 +1792,25 @@ SelectionDAGISel::FinishBasicBlock() {
     }
 
     // Update PHI Nodes
-    for (unsigned pi = 0, pe = FuncInfo->PHINodesToUpdate.size();
-         pi != pe; ++pi) {
-      MachineInstrBuilder PHI(*MF, FuncInfo->PHINodesToUpdate[pi].first);
+    for (const std::pair<MachineInstr *, unsigned> &P :
+         FuncInfo->PHINodesToUpdate) {
+      MachineInstrBuilder PHI(*MF, P.first);
       MachineBasicBlock *PHIBB = PHI->getParent();
       assert(PHI->isPHI() &&
              "This is not a machine PHI node that we are updating!");
       // This is "default" BB. We have two jumps to it. From "header" BB and
       // from last "case" BB, unless the latter was skipped.
       if (PHIBB == BTB.Default) {
-        PHI.addReg(FuncInfo->PHINodesToUpdate[pi].second).addMBB(BTB.Parent);
+        PHI.addReg(P.second).addMBB(BTB.Parent);
         if (!BTB.ContiguousRange) {
-          PHI.addReg(FuncInfo->PHINodesToUpdate[pi].second)
-              .addMBB(BTB.Cases.back().ThisBB);
+          PHI.addReg(P.second).addMBB(BTB.Cases.back().ThisBB);
          }
       }
       // One of "cases" BB.
-      for (unsigned j = 0, ej = BTB.Cases.size();
-           j != ej; ++j) {
-        MachineBasicBlock* cBB = BTB.Cases[j].ThisBB;
+      for (const SwitchCG::BitTestCase &BT : BTB.Cases) {
+        MachineBasicBlock* cBB = BT.ThisBB;
         if (cBB->isSuccessor(PHIBB))
-          PHI.addReg(FuncInfo->PHINodesToUpdate[pi].second).addMBB(cBB);
+          PHI.addReg(P.second).addMBB(cBB);
       }
     }
   }
@@ -3373,6 +3272,8 @@ void SelectionDAGISel::SelectCodeCommon(SDNode *NodeToMatch,
       assert(RecNo < RecordedNodes.size() && "Invalid EmitMergeInputChains");
       ChainNodesMatched.push_back(RecordedNodes[RecNo].first.getNode());
 
+      // If the chained node is not the root, we can't fold it if it has
+      // multiple uses.
       // FIXME: What if other value results of the node have uses not matched
       // by this pattern?
       if (ChainNodesMatched.back() != NodeToMatch &&
@@ -3410,6 +3311,8 @@ void SelectionDAGISel::SelectCodeCommon(SDNode *NodeToMatch,
         assert(RecNo < RecordedNodes.size() && "Invalid EmitMergeInputChains");
         ChainNodesMatched.push_back(RecordedNodes[RecNo].first.getNode());
 
+        // If the chained node is not the root, we can't fold it if it has
+        // multiple uses.
         // FIXME: What if other value results of the node have uses not matched
         // by this pattern?
         if (ChainNodesMatched.back() != NodeToMatch &&
@@ -3548,12 +3451,10 @@ void SelectionDAGISel::SelectCodeCommon(SDNode *NodeToMatch,
       // such nodes must have a chain, it suffices to check ChainNodesMatched.
       // We need to perform this check before potentially modifying one of the
       // nodes via MorphNode.
-      bool MayRaiseFPException = false;
-      for (auto *N : ChainNodesMatched)
-        if (mayRaiseFPException(N) && !N->getFlags().hasNoFPExcept()) {
-          MayRaiseFPException = true;
-          break;
-        }
+      bool MayRaiseFPException =
+          llvm::any_of(ChainNodesMatched, [this](SDNode *N) {
+            return mayRaiseFPException(N) && !N->getFlags().hasNoFPExcept();
+          });
 
       // Create the node.
       MachineSDNode *Res = nullptr;
@@ -3803,7 +3704,7 @@ void SelectionDAGISel::CannotYetSelect(SDNode *N) {
     else
       Msg << "unknown intrinsic #" << iid;
   }
-  report_fatal_error(Msg.str());
+  report_fatal_error(Twine(Msg.str()));
 }
 
 char SelectionDAGISel::ID = 0;

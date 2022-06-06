@@ -41,10 +41,9 @@ TEST(KnownBitsTest, AddCarryExhaustive) {
           });
         });
 
-        KnownBits KnownComputed = KnownBits::computeForAddCarry(
-            Known1, Known2, KnownCarry);
-        EXPECT_EQ(Known.Zero, KnownComputed.Zero);
-        EXPECT_EQ(Known.One, KnownComputed.One);
+        KnownBits KnownComputed =
+            KnownBits::computeForAddCarry(Known1, Known2, KnownCarry);
+        EXPECT_EQ(Known, KnownComputed);
       });
     });
   });
@@ -79,10 +78,9 @@ static void TestAddSubExhaustive(bool IsAdd) {
         });
       });
 
-      KnownBits KnownComputed = KnownBits::computeForAddSub(
-          IsAdd, /*NSW*/false, Known1, Known2);
-      EXPECT_EQ(Known.Zero, KnownComputed.Zero);
-      EXPECT_EQ(Known.One, KnownComputed.One);
+      KnownBits KnownComputed =
+          KnownBits::computeForAddSub(IsAdd, /*NSW*/ false, Known1, Known2);
+      EXPECT_EQ(Known, KnownComputed);
 
       // The NSW calculation is not precise, only check that it's
       // conservatively correct.
@@ -166,7 +164,7 @@ TEST(KnownBitsTest, BinaryExhaustive) {
           KnownMulHU.One &= Res;
           KnownMulHU.Zero &= ~Res;
 
-          if (!N2.isNullValue()) {
+          if (!N2.isZero()) {
             Res = N1.udiv(N2);
             KnownUDiv.One &= Res;
             KnownUDiv.Zero &= ~Res;
@@ -201,32 +199,25 @@ TEST(KnownBitsTest, BinaryExhaustive) {
       });
 
       KnownBits ComputedAnd = Known1 & Known2;
-      EXPECT_EQ(KnownAnd.Zero, ComputedAnd.Zero);
-      EXPECT_EQ(KnownAnd.One, ComputedAnd.One);
+      EXPECT_EQ(KnownAnd, ComputedAnd);
 
       KnownBits ComputedOr = Known1 | Known2;
-      EXPECT_EQ(KnownOr.Zero, ComputedOr.Zero);
-      EXPECT_EQ(KnownOr.One, ComputedOr.One);
+      EXPECT_EQ(KnownOr, ComputedOr);
 
       KnownBits ComputedXor = Known1 ^ Known2;
-      EXPECT_EQ(KnownXor.Zero, ComputedXor.Zero);
-      EXPECT_EQ(KnownXor.One, ComputedXor.One);
+      EXPECT_EQ(KnownXor, ComputedXor);
 
       KnownBits ComputedUMax = KnownBits::umax(Known1, Known2);
-      EXPECT_EQ(KnownUMax.Zero, ComputedUMax.Zero);
-      EXPECT_EQ(KnownUMax.One, ComputedUMax.One);
+      EXPECT_EQ(KnownUMax, ComputedUMax);
 
       KnownBits ComputedUMin = KnownBits::umin(Known1, Known2);
-      EXPECT_EQ(KnownUMin.Zero, ComputedUMin.Zero);
-      EXPECT_EQ(KnownUMin.One, ComputedUMin.One);
+      EXPECT_EQ(KnownUMin, ComputedUMin);
 
       KnownBits ComputedSMax = KnownBits::smax(Known1, Known2);
-      EXPECT_EQ(KnownSMax.Zero, ComputedSMax.Zero);
-      EXPECT_EQ(KnownSMax.One, ComputedSMax.One);
+      EXPECT_EQ(KnownSMax, ComputedSMax);
 
       KnownBits ComputedSMin = KnownBits::smin(Known1, Known2);
-      EXPECT_EQ(KnownSMin.Zero, ComputedSMin.Zero);
-      EXPECT_EQ(KnownSMin.One, ComputedSMin.One);
+      EXPECT_EQ(KnownSMin, ComputedSMin);
 
       // The following are conservatively correct, but not guaranteed to be
       // precise.
@@ -431,6 +422,28 @@ TEST(KnownBitsTest, GetSignedMinMaxVal) {
   });
 }
 
+TEST(KnownBitsTest, CountMaxActiveBits) {
+  unsigned Bits = 4;
+  ForeachKnownBits(Bits, [&](const KnownBits &Known) {
+    unsigned Expected = 0;
+    ForeachNumInKnownBits(Known, [&](const APInt &N) {
+      Expected = std::max(Expected, N.getActiveBits());
+    });
+    EXPECT_EQ(Expected, Known.countMaxActiveBits());
+  });
+}
+
+TEST(KnownBitsTest, CountMaxSignificantBits) {
+  unsigned Bits = 4;
+  ForeachKnownBits(Bits, [&](const KnownBits &Known) {
+    unsigned Expected = 0;
+    ForeachNumInKnownBits(Known, [&](const APInt &N) {
+      Expected = std::max(Expected, N.getSignificantBits());
+    });
+    EXPECT_EQ(Expected, Known.countMaxSignificantBits());
+  });
+}
+
 TEST(KnownBitsTest, SExtOrTrunc) {
   const unsigned NarrowerSize = 4;
   const unsigned BaseSize = 6;
@@ -454,8 +467,7 @@ TEST(KnownBitsTest, SExtOrTrunc) {
       KnownBits Baseline;
       InitKnownBits(Baseline, Input.sextOrTrunc(Size));
       Test = Test.sextOrTrunc(Size);
-      EXPECT_EQ(Test.One, Baseline.One);
-      EXPECT_EQ(Test.Zero, Baseline.Zero);
+      EXPECT_EQ(Test, Baseline);
     }
   }
 }

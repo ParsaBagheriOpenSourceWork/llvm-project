@@ -20,20 +20,19 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/Analysis/DomTreeUpdater.h"
 #include "llvm/Analysis/InstructionSimplify.h"
 #include "llvm/Analysis/LoopIterator.h"
 #include "llvm/Analysis/ScalarEvolution.h"
+#include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/MDBuilder.h"
-#include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Transforms/Utils.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/Local.h"
@@ -353,20 +352,22 @@ CloneLoopBlocks(Loop *L, Value *NewIter, const bool UseEpilogRemainder,
     if (Latch == *BB) {
       // For the last block, create a loop back to cloned head.
       VMap.erase((*BB)->getTerminator());
+      // Use an incrementing IV.  Pre-incr/post-incr is backedge/trip count.
+      // Subtle: NewIter can be 0 if we wrapped when computing the trip count,
+      // thus we must compare the post-increment (wrapping) value.
       BasicBlock *FirstLoopBB = cast<BasicBlock>(VMap[Header]);
       BranchInst *LatchBR = cast<BranchInst>(NewBB->getTerminator());
       IRBuilder<> Builder(LatchBR);
       PHINode *NewIdx = PHINode::Create(NewIter->getType(), 2,
                                         suffix + ".iter",
                                         FirstLoopBB->getFirstNonPHI());
-      Value *IdxSub =
-        Builder.CreateSub(NewIdx, ConstantInt::get(NewIdx->getType(), 1),
-                          NewIdx->getName() + ".sub");
-      Value *IdxCmp =
-        Builder.CreateIsNotNull(IdxSub, NewIdx->getName() + ".cmp");
+      auto *Zero = ConstantInt::get(NewIdx->getType(), 0);
+      auto *One = ConstantInt::get(NewIdx->getType(), 1);
+      Value *IdxNext = Builder.CreateAdd(NewIdx, One, NewIdx->getName() + ".next");
+      Value *IdxCmp = Builder.CreateICmpNE(IdxNext, NewIter, NewIdx->getName() + ".cmp");
       Builder.CreateCondBr(IdxCmp, FirstLoopBB, InsertBot);
-      NewIdx->addIncoming(NewIter, InsertTop);
-      NewIdx->addIncoming(IdxSub, NewBB);
+      NewIdx->addIncoming(Zero, InsertTop);
+      NewIdx->addIncoming(IdxNext, NewBB);
       LatchBR->eraseFromParent();
     }
   }
@@ -409,49 +410,15 @@ CloneLoopBlocks(Loop *L, Value *NewIter, const bool UseEpilogRemainder,
   return NewLoop;
 }
 
-/// Returns true if we can safely unroll a multi-exit/exiting loop. OtherExits
-/// is populated with all the loop exit blocks other than the LatchExit block.
-static bool canSafelyUnrollMultiExitLoop(Loop *L, BasicBlock *LatchExit,
-                                         bool PreserveLCSSA,
-                                         bool UseEpilogRemainder) {
-
-  // We currently have some correctness constrains in unrolling a multi-exit
-  // loop. Check for these below.
-
-  // We rely on LCSSA form being preserved when the exit blocks are transformed.
-  // (Note that only an off-by-default mode of the old PM disables PreserveLCCA.)
-  if (!PreserveLCSSA)
-    return false;
-
-  // All constraints have been satisfied.
-  return true;
-}
-
 /// Returns true if we can profitably unroll the multi-exit loop L. Currently,
 /// we return true only if UnrollRuntimeMultiExit is set to true.
 static bool canProfitablyUnrollMultiExitLoop(
     Loop *L, SmallVectorImpl<BasicBlock *> &OtherExits, BasicBlock *LatchExit,
-    bool PreserveLCSSA, bool UseEpilogRemainder) {
-
-#if !defined(NDEBUG)
-  assert(canSafelyUnrollMultiExitLoop(L, LatchExit, PreserveLCSSA,
-                                      UseEpilogRemainder) &&
-         "Should be safe to unroll before checking profitability!");
-#endif
+    bool UseEpilogRemainder) {
 
   // Priority goes to UnrollRuntimeMultiExit if it's supplied.
   if (UnrollRuntimeMultiExit.getNumOccurrences())
     return UnrollRuntimeMultiExit;
-
-  // TODO: We used to bail out for correctness (now fixed).  Under what
-  // circumstances is this case profitable to allow?
-  if (!LatchExit->getSinglePredecessor())
-    return false;
-
-  // TODO: We used to bail out for correctness (now fixed).  Under what
-  // circumstances is this case profitable to allow?
-  if (UseEpilogRemainder && L->getParentLoop())
-    return false;
 
   // The main pain point with multi-exit loop unrolling is that once unrolled,
   // we will not be able to merge all blocks into a straight line code.
@@ -633,34 +600,35 @@ bool llvm::UnrollRuntimeLoopRemainder(
   // These are exit blocks other than the target of the latch exiting block.
   SmallVector<BasicBlock *, 4> OtherExits;
   L->getUniqueNonLatchExitBlocks(OtherExits);
-  bool isMultiExitUnrollingEnabled =
-      canSafelyUnrollMultiExitLoop(L, LatchExit, PreserveLCSSA,
-                                   UseEpilogRemainder) &&
-      canProfitablyUnrollMultiExitLoop(L, OtherExits, LatchExit, PreserveLCSSA,
-                                       UseEpilogRemainder);
-  // Support only single exit and exiting block unless multi-exit loop unrolling is enabled.
-  if (!isMultiExitUnrollingEnabled &&
-      (!L->getExitingBlock() || OtherExits.size())) {
-    LLVM_DEBUG(
-        dbgs()
-        << "Multiple exit/exiting blocks in loop and multi-exit unrolling not "
-           "enabled!\n");
-    return false;
+  // Support only single exit and exiting block unless multi-exit loop
+  // unrolling is enabled.
+  if (!L->getExitingBlock() || OtherExits.size()) {
+    // We rely on LCSSA form being preserved when the exit blocks are transformed.
+    // (Note that only an off-by-default mode of the old PM disables PreserveLCCA.)
+    if (!PreserveLCSSA)
+      return false;
+
+    if (!canProfitablyUnrollMultiExitLoop(L, OtherExits, LatchExit,
+                                          UseEpilogRemainder)) {
+      LLVM_DEBUG(
+          dbgs()
+          << "Multiple exit/exiting blocks in loop and multi-exit unrolling not "
+             "enabled!\n");
+      return false;
+    }
   }
   // Use Scalar Evolution to compute the trip count. This allows more loops to
   // be unrolled than relying on induction var simplification.
   if (!SE)
     return false;
 
-  // Only unroll loops with a computable trip count, and the trip count needs
-  // to be an int value (allowing a pointer type is a TODO item).
+  // Only unroll loops with a computable trip count.
   // We calculate the backedge count by using getExitCount on the Latch block,
   // which is proven to be the only exiting block in this loop. This is same as
   // calculating getBackedgeTakenCount on the loop (which computes SCEV for all
   // exiting blocks).
   const SCEV *BECountSC = SE->getExitCount(L, Latch);
-  if (isa<SCEVCouldNotCompute>(BECountSC) ||
-      !BECountSC->getType()->isIntegerTy()) {
+  if (isa<SCEVCouldNotCompute>(BECountSC)) {
     LLVM_DEBUG(dbgs() << "Could not compute exit block SCEV\n");
     return false;
   }
@@ -770,11 +738,28 @@ bool llvm::UnrollRuntimeLoopRemainder(
   // Compute the number of extra iterations required, which is:
   //  extra iterations = run-time trip count % loop unroll factor
   PreHeaderBR = cast<BranchInst>(PreHeader->getTerminator());
+  IRBuilder<> B(PreHeaderBR);
   Value *TripCount = Expander.expandCodeFor(TripCountSC, TripCountSC->getType(),
                                             PreHeaderBR);
-  Value *BECount = Expander.expandCodeFor(BECountSC, BECountSC->getType(),
-                                          PreHeaderBR);
-  IRBuilder<> B(PreHeaderBR);
+  Value *BECount;
+  // If there are other exits before the latch, that may cause the latch exit
+  // branch to never be executed, and the latch exit count may be poison.
+  // In this case, freeze the TripCount and base BECount on the frozen
+  // TripCount. We will introduce two branches using these values, and it's
+  // important that they see a consistent value (which would not be guaranteed
+  // if were frozen independently.)
+  if ((!OtherExits.empty() || !SE->loopHasNoAbnormalExits(L)) &&
+      !isGuaranteedNotToBeUndefOrPoison(TripCount, AC, PreHeaderBR, DT)) {
+    TripCount = B.CreateFreeze(TripCount);
+    BECount =
+        B.CreateAdd(TripCount, ConstantInt::get(TripCount->getType(), -1));
+  } else {
+    // If we don't need to freeze, use SCEVExpander for BECount as well, to
+    // allow slightly better value reuse.
+    BECount =
+        Expander.expandCodeFor(BECountSC, BECountSC->getType(), PreHeaderBR);
+  }
+
   Value * const ModVal = CreateTripRemainder(B, BECount, TripCount, Count);
 
   Value *BranchVal =
@@ -858,9 +843,7 @@ bool llvm::UnrollRuntimeLoopRemainder(
    }
 #if defined(EXPENSIVE_CHECKS) && !defined(NDEBUG)
     for (BasicBlock *SuccBB : successors(BB)) {
-      assert(!(any_of(OtherExits,
-                      [SuccBB](BasicBlock *EB) { return EB == SuccBB; }) ||
-               SuccBB == LatchExit) &&
+      assert(!(llvm::is_contained(OtherExits, SuccBB) || SuccBB == LatchExit) &&
              "Breaks the definition of dedicated exits!");
     }
 #endif
@@ -922,23 +905,22 @@ bool llvm::UnrollRuntimeLoopRemainder(
                   PreserveLCSSA);
 
     // Update counter in loop for unrolling.
-    // I should be multiply of Count.
+    // Use an incrementing IV.  Pre-incr/post-incr is backedge/trip count.
+    // Subtle: TestVal can be 0 if we wrapped when computing the trip count,
+    // thus we must compare the post-increment (wrapping) value.
     IRBuilder<> B2(NewPreHeader->getTerminator());
     Value *TestVal = B2.CreateSub(TripCount, ModVal, "unroll_iter");
     BranchInst *LatchBR = cast<BranchInst>(Latch->getTerminator());
-    B2.SetInsertPoint(LatchBR);
     PHINode *NewIdx = PHINode::Create(TestVal->getType(), 2, "niter",
                                       Header->getFirstNonPHI());
-    Value *IdxSub =
-        B2.CreateSub(NewIdx, ConstantInt::get(NewIdx->getType(), 1),
-                     NewIdx->getName() + ".nsub");
-    Value *IdxCmp;
-    if (LatchBR->getSuccessor(0) == Header)
-      IdxCmp = B2.CreateIsNotNull(IdxSub, NewIdx->getName() + ".ncmp");
-    else
-      IdxCmp = B2.CreateIsNull(IdxSub, NewIdx->getName() + ".ncmp");
-    NewIdx->addIncoming(TestVal, NewPreHeader);
-    NewIdx->addIncoming(IdxSub, Latch);
+    B2.SetInsertPoint(LatchBR);
+    auto *Zero = ConstantInt::get(NewIdx->getType(), 0);
+    auto *One = ConstantInt::get(NewIdx->getType(), 1);
+    Value *IdxNext = B2.CreateAdd(NewIdx, One, NewIdx->getName() + ".next");
+    auto Pred = LatchBR->getSuccessor(0) == Header ? ICmpInst::ICMP_NE : ICmpInst::ICMP_EQ;
+    Value *IdxCmp = B2.CreateICmp(Pred, IdxNext, TestVal, NewIdx->getName() + ".ncmp");
+    NewIdx->addIncoming(Zero, NewPreHeader);
+    NewIdx->addIncoming(IdxNext, Latch);
     LatchBR->setCondition(IdxCmp);
   } else {
     // Connect the prolog code to the original loop and update the

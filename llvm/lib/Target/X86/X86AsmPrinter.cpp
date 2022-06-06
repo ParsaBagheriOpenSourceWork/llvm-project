@@ -29,6 +29,7 @@
 #include "llvm/IR/Mangler.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Type.h"
+#include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCCodeEmitter.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCExpr.h"
@@ -37,10 +38,10 @@
 #include "llvm/MC/MCSectionMachO.h"
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCSymbol.h"
+#include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MachineValueType.h"
-#include "llvm/Support/TargetRegistry.h"
 #include "llvm/Target/TargetMachine.h"
 
 using namespace llvm;
@@ -60,8 +61,7 @@ bool X86AsmPrinter::runOnMachineFunction(MachineFunction &MF) {
 
   SMShadowTracker.startFunction(MF);
   CodeEmitter.reset(TM.getTarget().createMCCodeEmitter(
-      *Subtarget->getInstrInfo(), *Subtarget->getRegisterInfo(),
-      MF.getContext()));
+      *Subtarget->getInstrInfo(), MF.getContext()));
 
   EmitFPOData =
       Subtarget->isTargetWin32() && MF.getMMI().getModule()->getCodeViewFlag();
@@ -190,6 +190,7 @@ void X86AsmPrinter::PrintSymbolOperand(const MachineOperand &MO,
   case X86II::MO_NTPOFF:    O << "@NTPOFF";    break;
   case X86II::MO_GOTNTPOFF: O << "@GOTNTPOFF"; break;
   case X86II::MO_GOTPCREL:  O << "@GOTPCREL";  break;
+  case X86II::MO_GOTPCREL_NORELAX: O << "@GOTPCREL_NORELAX"; break;
   case X86II::MO_GOT:       O << "@GOT";       break;
   case X86II::MO_GOTOFF:    O << "@GOTOFF";    break;
   case X86II::MO_PLT:       O << "@PLT";       break;
@@ -361,6 +362,12 @@ void X86AsmPrinter::PrintIntelMemReference(const MachineInstr *MI,
   if (HasBaseReg && Modifier && !strcmp(Modifier, "no-rip") &&
       BaseReg.getReg() == X86::RIP)
     HasBaseReg = false;
+
+  // If we really just want to print out displacement.
+  if (Modifier && (DispSpec.isGlobal() || DispSpec.isSymbol()) &&
+      !strcmp(Modifier, "disp-only")) {
+    HasBaseReg = false;
+  }
 
   // If this has a segment register, print it.
   if (SegReg.getReg()) {
@@ -605,11 +612,14 @@ bool X86AsmPrinter::PrintAsmMemoryOperand(const MachineInstr *MI, unsigned OpNo,
         PrintMemReference(MI, OpNo, O, "H");
       }
       return false;
-    case 'P': // Don't print @PLT, but do print as memory.
+   // Print memory only with displacement. The Modifer 'P' is used in inline
+   // asm to present a call symbol or a global symbol which can not use base
+   // reg or index reg.
+    case 'P':
       if (MI->getInlineAsmDialect() == InlineAsm::AD_Intel) {
-        PrintIntelMemReference(MI, OpNo, O, "no-rip");
+        PrintIntelMemReference(MI, OpNo, O, "disp-only");
       } else {
-        PrintMemReference(MI, OpNo, O, "no-rip");
+        PrintMemReference(MI, OpNo, O, "disp-only");
       }
       return false;
     }
@@ -753,8 +763,6 @@ static void emitNonLazyStubs(MachineModuleInfo *MMI, MCStreamer &OutStreamer) {
 void X86AsmPrinter::emitEndOfAsmFile(Module &M) {
   const Triple &TT = TM.getTargetTriple();
 
-  emitAsanMemaccessSymbols(M);
-
   if (TT.isOSBinFormatMachO()) {
     // Mach-O uses non-lazy symbol stubs to encode per-TU information into
     // global table for symbol lookup.
@@ -795,6 +803,22 @@ void X86AsmPrinter::emitEndOfAsmFile(Module &M) {
   } else if (TT.isOSBinFormatELF()) {
     emitStackMaps(SM);
     FM.serializeToFaultMapSection();
+  }
+
+  // Emit __morestack address if needed for indirect calls.
+  if (TT.getArch() == Triple::x86_64 && TM.getCodeModel() == CodeModel::Large) {
+    if (MCSymbol *AddrSymbol = OutContext.lookupSymbol("__morestack_addr")) {
+      Align Alignment(1);
+      MCSection *ReadOnlySection = getObjFileLowering().getSectionForConstant(
+          getDataLayout(), SectionKind::getReadOnly(),
+          /*C=*/nullptr, Alignment);
+      OutStreamer->SwitchSection(ReadOnlySection);
+      OutStreamer->emitLabel(AddrSymbol);
+
+      unsigned PtrSize = MAI->getCodePointerSize();
+      OutStreamer->emitSymbolValue(GetExternalSymbolSymbol("__morestack"),
+                                   PtrSize);
+    }
   }
 }
 

@@ -44,33 +44,26 @@
 #ifndef LLVM_MC_MCPSEUDOPROBE_H
 #define LLVM_MC_MCPSEUDOPROBE_H
 
-#include "llvm/ADT/MapVector.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/ADT/Twine.h"
 #include "llvm/IR/PseudoProbe.h"
-#include "llvm/MC/MCSection.h"
-#include "llvm/Support/Errc.h"
-#include "llvm/Support/Error.h"
 #include "llvm/Support/ErrorOr.h"
-#include "llvm/Support/WithColor.h"
-#include "llvm/Support/raw_ostream.h"
-#include <algorithm>
-#include <functional>
 #include <list>
 #include <map>
-#include <set>
-#include <sstream>
+#include <memory>
 #include <string>
-#include <system_error>
+#include <tuple>
+#include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
 namespace llvm {
 
-class MCStreamer;
+class MCSection;
 class MCSymbol;
 class MCObjectStreamer;
+class raw_ostream;
 
 enum class MCPseudoProbeFlag {
   // If set, indicates that the probe is encoded as an address delta
@@ -90,7 +83,6 @@ struct MCPseudoProbeFuncDesc {
   void print(raw_ostream &OS);
 };
 
-class MCPseudoProbe;
 class MCDecodedPseudoProbe;
 
 // An inline frame has the form <Guid, ProbeID>
@@ -103,7 +95,6 @@ using GUIDProbeFunctionMap =
 using AddressProbesMap =
     std::unordered_map<uint64_t, std::list<MCDecodedPseudoProbe>>;
 
-class MCPseudoProbeInlineTree;
 class MCDecodedPseudoProbeInlineTree;
 
 class MCPseudoProbeBase {
@@ -276,7 +267,7 @@ public:
   // Used for decoding
   uint32_t ChildrenToProcess = 0;
 
-  MCDecodedPseudoProbeInlineTree(){};
+  MCDecodedPseudoProbeInlineTree() = default;
   MCDecodedPseudoProbeInlineTree(const InlineSite &Site) : ISite(Site){};
 
   // Return false if it's a dummy inline site
@@ -362,6 +353,15 @@ public:
 
   // Decode pseudo_probe section to build address to probes map.
   bool buildAddress2ProbeMap(const uint8_t *Start, std::size_t Size);
+
+  // Decode pseudo_probe section to build address to probes map for specifed
+  // functions only.
+  bool buildAddress2ProbeMap(const uint8_t *Start, std::size_t Size,
+                             std::unordered_set<uint64_t> &GuildFilter);
+
+  bool buildAddress2ProbeMap(MCDecodedPseudoProbeInlineTree *Cur,
+                             uint64_t &LastAddr,
+                             std::unordered_set<uint64_t> &GuildFilter);
 
   // Print pseudo_probe_desc section info
   void printGUID2FuncDescMap(raw_ostream &OS);
