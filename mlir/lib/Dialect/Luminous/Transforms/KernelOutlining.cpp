@@ -84,7 +84,7 @@ struct DispatchBlocksImpl {
 void DispatchBlock::pushBack(Operation *op) {
   assert(op->getParentOp() == impl.launchOp && "can only push back operations "
                                                "within launch op");
-  // handling operands
+  // handling operands, they could be arguments to the dispatch block
   for (auto operand : op->getOperands()) {
     // if the operands of the current op have been visited before then
     // continue, otherwise they are arguments to this block.
@@ -106,6 +106,9 @@ void DispatchBlock::pushBack(Operation *op) {
 
   // keeping track of ops to later replace them with a dispatch call
   impl.ops.push_back(op);
+
+  // now that the possible arguments are added to the dispatch block
+  // we can clone and insert the op in the dispatch block
   auto *clone = impl.builder.clone(*op, impl.cloningMap);
   impl.block->push_back(clone);
 }
