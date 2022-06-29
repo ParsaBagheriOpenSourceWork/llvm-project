@@ -10,9 +10,9 @@
 #define DIALECT_LUMINOUS_TRANSFORMS_PASSDETAIL_H_
 
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Dialect.h"
 #include "mlir/Pass/Pass.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
 
 namespace mlir {
 // Forward declaration from Dialect.h
@@ -38,6 +38,14 @@ class MemRefDialect;
 namespace async {
 class AsyncDialect;
 } // namespace async
+
+namespace LLVM {
+class LLVMDialect;
+} // namespace LLVM
+
+namespace luminous {
+class LuminousModuleOp;
+} // namespace luminous
 
 #define GEN_PASS_CLASSES
 #include "mlir/Dialect/Luminous/Passes.h.inc"

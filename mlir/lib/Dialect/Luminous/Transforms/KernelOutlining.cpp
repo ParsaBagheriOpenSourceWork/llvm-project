@@ -1,14 +1,8 @@
-//===- SCFToLuminous.cpp - SCF to Luminous conversion ---------------------===//
+//===- KernelOutlining.cpp - Outlines luminous kernels --------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
-//===----------------------------------------------------------------------===//
-//
-// This file implements a pass to convert scf.parallel operations into luminous
-// dispatches. This file contains copies of some static functions and types
-// from mlir/lib/Dialect/Async/Transform/AsyncParallelFor.cpp
 //
 //===----------------------------------------------------------------------===//
 
@@ -23,6 +17,7 @@
 #include "mlir/IR/BlockAndValueMapping.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 
 using namespace mlir;
 using namespace mlir::async;
@@ -89,7 +84,7 @@ struct DispatchBlocksImpl {
 void DispatchBlock::pushBack(Operation *op) {
   assert(op->getParentOp() == impl.launchOp && "can only push back operations "
                                                "within launch op");
-  // handling operands
+  // handling operands, they could be arguments to the dispatch block
   for (auto operand : op->getOperands()) {
     // if the operands of the current op have been visited before then
     // continue, otherwise they are arguments to this block.
@@ -111,6 +106,9 @@ void DispatchBlock::pushBack(Operation *op) {
 
   // keeping track of ops to later replace them with a dispatch call
   impl.ops.push_back(op);
+
+  // now that the possible arguments are added to the dispatch block
+  // we can clone and insert the op in the dispatch block
   auto *clone = impl.builder.clone(*op, impl.cloningMap);
   impl.block->push_back(clone);
 }
@@ -308,7 +306,6 @@ LogicalResult KernelOutliningRewritePattern::matchAndRewrite(
   DispatchBlocks dispatchBlocks(dispatchBlocksImpl);
   dispatchBuilderFn(op, dispatchBlocks);
   outlineKernels(op, rewriter, loc, luminousModule, dispatchBlocksImpl);
-
   return success();
 }
 
