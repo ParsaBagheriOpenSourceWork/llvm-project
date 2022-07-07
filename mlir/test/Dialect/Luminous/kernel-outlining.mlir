@@ -36,6 +36,7 @@ module {
 }
 
 // -----
+
 module {
   func.func @test2(%arg0: memref<1024x1024xf32>, %arg1: memref<1024xf32>, %arg2: memref<1024xf32>, %arg3: memref<f32>) {
     %c1024 = arith.constant 1024 : index
@@ -50,6 +51,7 @@ module {
     return
   }
 }
+
 // CHECK-LABEL: luminous.module @device_module
 // CHECK-LABEL: luminous.func @async_fn_1
 // CHECK-LABEL: luminous.func @async_fn_2
@@ -63,3 +65,21 @@ module {
         // CHECK: %[[DISP1:.*]] = luminous.dispatch  [%[[DISP0]]] @device_module::@async_fn_2 (%[[ARG0:.*]], %[[ARG2:.*]], %[[ARG1:.*]])
         // CHECK: %[[DISP2:.*]] = luminous.dispatch  [%[[DISP1]]] @device_module::@async_fn_3 (%[[ARG1:.*]], %[[ARG2:.*]], %[[ARG3:.*]])
         // CHECK: async.await %[[DISP2]] : !async.token
+
+
+// -----
+
+module {
+  func.func @test3(%arg0: memref<1024x1024xf32>, %arg1: memref<1024xf32>, %arg2: memref<1024xf32>, %arg3: memref<f32>) {
+    %c1024 = arith.constant 1024 : index
+    %c0 = arith.constant 0 : index
+    luminous.launch shape (%c1024) step (%c1024){
+    ^bb0(%arg4: index):
+      scf.for %arg5 = %c0 to %c1024 step %c1024 {
+        linalg.matvec {"linalg-max-memory-footprint" = 10000 : i64} ins(%arg0, %arg1 : memref<1024x1024xf32>, memref<1024xf32>) outs(%arg2 : memref<1024xf32>)
+      } {"linalg-max-memory-footprint" = 10000 : i64}
+      luminous.yield
+    }
+    return
+  }
+}

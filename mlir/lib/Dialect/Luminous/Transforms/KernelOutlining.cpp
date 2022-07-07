@@ -13,6 +13,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "PassDetail.h"
+#include "mlir/Analysis/AliasAnalysis/LocalAliasAnalysis.h"
 #include "mlir/Conversion/SCFToLuminous/SCFToLuminous.h"
 #include "mlir/Dialect/Async/IR/Async.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
@@ -58,7 +59,7 @@ struct DispatchBlockImpl {
   std::unique_ptr<Block> block;
   SmallVector<Value> args;
   SmallVector<Operation *> ops;
-  SetVector<Value> opResults;
+  SetVector<Value> visitedValues;
   BlockAndValueMapping cloningMap;
   SmallVector<DispatchBlockImpl *> dependencies;
   DispatchBlockImpl(LaunchOp op, ArrayRef<DispatchBlock> deps,
@@ -84,16 +85,13 @@ struct DispatchBlocksImpl {
 
 } // namespace detail
 
-/// Clones `op' and inserts it in the basic block; it keeps track of
-/// the op for performing replacement with dispatch call.
-void DispatchBlock::pushBack(Operation *op) {
-  assert(op->getParentOp() == impl.launchOp && "can only push back operations "
-                                               "within launch op");
+static void handleOpsOperands(detail::DispatchBlockImpl &impl, Operation *op) {
   // handling operands
   for (auto operand : op->getOperands()) {
     // if the operands of the current op have been visited before then
     // continue, otherwise they are arguments to this block.
-    if (impl.opResults.contains(operand) || impl.cloningMap.contains(operand))
+    if (impl.visitedValues.contains(operand) ||
+        impl.cloningMap.contains(operand))
       continue;
 
     impl.args.push_back(operand);
@@ -101,16 +99,47 @@ void DispatchBlock::pushBack(Operation *op) {
         impl.block->addArgument(operand.getType(), operand.getLoc());
     impl.cloningMap.map(operand, blockArg);
   }
+}
 
+static void handleOpsResults(detail::DispatchBlockImpl &impl, Operation *op) {
   // keeping track of ops results to determine whether the value is an
   // argument to the block or has been produced in the block
   for (auto result : op->getOpResults()) {
-    assert(!impl.opResults.contains(result));
-    impl.opResults.insert(result);
+    assert(!impl.visitedValues.contains(result) && "op has already been visited");
+    impl.visitedValues.insert(result);
   }
+}
+
+static void handleOpsBody(detail::DispatchBlockImpl &impl, Operation *op) {
+  for (Region &r : op->getRegions()) {
+    for (Block &b : r.getBlocks()) {
+      for (auto operand : b.getArguments()) {
+        if (!impl.visitedValues.contains(operand)) {
+          impl.visitedValues.insert(operand);
+        }
+      }
+      for (Operation &innerOp : b) {
+        handleOpsOperands(impl, &innerOp);
+        handleOpsResults(impl, &innerOp);
+        handleOpsBody(impl, &innerOp);
+      }
+    }
+  }
+}
+
+/// Clones `op' and inserts it in the basic block; it keeps track of
+/// the op for performing replacement with dispatch call.
+void DispatchBlock::pushBack(Operation *op) {
+  assert(op->getParentOp() == impl.launchOp && "can only push back operations "
+                                               "within launch op");
+  handleOpsOperands(impl, op);
+  handleOpsResults(impl, op);
+  handleOpsBody(impl, op);
 
   // keeping track of ops to later replace them with a dispatch call
   impl.ops.push_back(op);
+
+  // cloning and inserting the op in the capsule block
   auto *clone = impl.builder.clone(*op, impl.cloningMap);
   impl.block->push_back(clone);
 }
@@ -188,7 +217,6 @@ outline(PatternRewriter &rewriter, Location loc,
 
   auto dispatchToken = replaceOpsWithDispatchCall(
       rewriter, func, dependencyTokens, impl->ops, impl->args);
-
   outlined.insert({impl, dispatchToken});
 }
 
@@ -203,11 +231,10 @@ void outlineKernels(LaunchOp op, PatternRewriter &rewriter, Location loc,
             usedDispatchTokens);
   }
 
-  ImplicitLocOpBuilder::InsertionGuard guard(rewriter);
-  rewriter.setInsertionPointAfter(
-      op.body().back().getTerminator()->getPrevNode());
   for (auto &p : outlined) {
     auto dispatchToken = p.second;
+    ImplicitLocOpBuilder::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPointAfterValue(dispatchToken);
     if (!usedDispatchTokens.contains(dispatchToken)) {
       rewriter.create<AwaitOp>(loc, dispatchToken);
     }
@@ -245,18 +272,38 @@ static LuminousModuleOp getLuminousModule(Operation *op, Location loc,
 
 void defaultDispatchBuilderFn(LaunchOp launchOp,
                               DispatchBlocks &dispatchBlocks) {
-  auto &body = launchOp.body().back();
+  std::function<void(Block &)> bodyHandler;
   SmallVector<DispatchBlock> dependencies;
-  for (auto &op : body) {
-    if (!op.hasAttr(luminous::maxMemoryAttrName))
-      continue;
+  bodyHandler = [&](Block &body) {
+    for (auto &op : body) {
+      // add a new block to the dispatch blocks and fill it with ops for every
+      // op that has 'luminous::maxMemoryAttrName' attribute
+      if (op.hasAttr(luminous::maxMemoryAttrName)) {
+        // making sure parent op hasn't already been dispatched, nested
+        // dispatches are not allowed
+        Operation *p = op.getParentOp();
+        while (!isa<LaunchOp>(p)) {
+          assert(!p->hasAttr(luminous::maxMemoryAttrName) &&
+                 "attempting a nested dispatch!");
+          p = p->getParentOp();
+        }
+        auto block = dispatchBlocks.addNewBlock(dependencies);
+        dependencies.clear();
+        block.pushBack(&op);
+        dependencies.push_back(block);
+      }
 
-    // add a new block to the dispatch blocks and fill it with ops
-    auto block = dispatchBlocks.addNewBlock(dependencies);
-    dependencies.clear();
-    block.pushBack(&op);
-    dependencies.push_back(block);
-  }
+      // searching through the body for the aforementioned attribute
+      for (auto &r : op.getRegions()) {
+        for (auto &b : r.getBlocks()) {
+          bodyHandler(b);
+        }
+      }
+    }
+  };
+
+  auto &body = launchOp.body().back();
+  bodyHandler(body);
 }
 
 } // namespace luminous
@@ -308,7 +355,6 @@ LogicalResult KernelOutliningRewritePattern::matchAndRewrite(
   DispatchBlocks dispatchBlocks(dispatchBlocksImpl);
   dispatchBuilderFn(op, dispatchBlocks);
   outlineKernels(op, rewriter, loc, luminousModule, dispatchBlocksImpl);
-
   return success();
 }
 
