@@ -13,7 +13,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "PassDetail.h"
-#include "mlir/Analysis/AliasAnalysis/LocalAliasAnalysis.h"
 #include "mlir/Conversion/SCFToLuminous/SCFToLuminous.h"
 #include "mlir/Dialect/Async/IR/Async.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
