@@ -130,8 +130,17 @@ static void handleOpsBody(detail::DispatchBlockImpl &impl, Operation *op) {
 /// Clones `op' and inserts it in the basic block; it keeps track of
 /// the op for performing replacement with dispatch call.
 void DispatchBlock::pushBack(Operation *op) {
-  assert(op->getParentOp() == impl.launchOp && "can only push back operations "
-                                               "within launch op");
+
+  Operation *p = op->getParentOp();
+  while (!isa<ModuleOp>(p)) {
+    if (p == impl.launchOp)
+      break;
+    p = p->getParentOp();
+  }
+  assert(!isa<ModuleOp>(p) &&
+         "can only push back operations within luminous.launch or parallel "
+         "with luminous launch attr, but no such parent found");
+
   handleOpsOperands(impl, op);
   handleOpsResults(impl, op);
   handleOpsBody(impl, op);
