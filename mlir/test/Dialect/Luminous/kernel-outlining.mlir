@@ -60,9 +60,9 @@ module {
     // CHECK: %[[C1024:.*]] = arith.constant 1024 : index
     // CHECK: luminous.launch shape (%[[C1024]]) step (%[[C1024]])
     // CHECK: ^[[BLOCK:.*]](%[[ARG4:.*]]):
-        // CHECK: %[[DISP0:.*]] = luminous.dispatch  @device_module::@[[ASYNC_FN_0:.*]] (%[[ARG0:.*]], %[[ARG1:.*]], %[[ARG2:.*]])
-        // CHECK: %[[DISP1:.*]] = luminous.dispatch  [%[[DISP0]]] @device_module::@[[ASYNC_FN_1:.*]] (%[[ARG0:.*]], %[[ARG2:.*]], %[[ARG1:.*]])
-        // CHECK: %[[DISP2:.*]] = luminous.dispatch  [%[[DISP1]]] @device_module::@[[ASYNC_FN_2:.*]] (%[[ARG1:.*]], %[[ARG2:.*]], %[[ARG3:.*]])
+        // CHECK: %[[DISP0:.*]] = luminous.dispatch  @[[CAPSULE:.*]]::@[[ASYNC_FN_0:.*]] (%[[ARG0:.*]], %[[ARG1:.*]], %[[ARG2:.*]])
+        // CHECK: %[[DISP1:.*]] = luminous.dispatch  [%[[DISP0]]] @[[CAPSULE:.*]]::@[[ASYNC_FN_1:.*]] (%[[ARG0:.*]], %[[ARG2:.*]], %[[ARG1:.*]])
+        // CHECK: %[[DISP2:.*]] = luminous.dispatch  [%[[DISP1]]] @[[CAPSULE:.*]]::@[[ASYNC_FN_2:.*]] (%[[ARG1:.*]], %[[ARG2:.*]], %[[ARG3:.*]])
         // CHECK: async.await %[[DISP2]] : !async.token
 
 
@@ -83,7 +83,7 @@ module {
   }
 }
 
-// CHECK-LABEL: luminous.module @device_module
+// CHECK: luminous.module @[[CAPSULE:.*]]
 // CHECK: luminous.func @[[ASYNC_FN_0:.*]]
 // CHECK-LABEL: func.func @test3
 // CHECK: (%[[ARG0:.*]], %[[ARG1:.*]], %[[ARG2:.*]])
@@ -92,5 +92,5 @@ module {
     // CHECK: luminous.launch shape (%[[C1024]]) step (%[[C1024]])
     // CHECK: ^[[BLOCK:.*]](%[[ARG3:.*]]):
         // CHECK: scf.for %[[ARG4:.*]] = %[[C0:.*]] to %[[C1024:.*]] step %[[C1024:.*]] {
-            // CHECK: %[[DISP0:.*]] = luminous.dispatch  @device_module::@[[ASYNC_FN_0:.*]] (%[[ARG0:.*]], %[[ARG1:.*]], %[[ARG2:.*]])
+            // CHECK: %[[DISP0:.*]] = luminous.dispatch  @[[CAPSULE:.*]]::@[[ASYNC_FN_0:.*]] (%[[ARG0:.*]], %[[ARG1:.*]], %[[ARG2:.*]])
             // CHECK: async.await %[[DISP0]] : !async.token
