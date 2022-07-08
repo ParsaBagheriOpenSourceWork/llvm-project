@@ -55,11 +55,11 @@ public:
 
 /// A user defined function for deciding which ops within LaunchOp needs to be
 /// dispatched
-using DispatchBuilderFn = std::function<void(LaunchOp, DispatchBlocks &)>;
+using DispatchBuilderFn = std::function<void(Operation *, DispatchBlocks &)>;
 
 /// The default dispatch builder function dispatches all of the ops with a
 /// certain attribute
-void defaultDispatchBuilderFn(LaunchOp, DispatchBlocks &);
+void defaultDispatchBuilderFn(Operation *, DispatchBlocks &);
 
 } // namespace luminous
 
