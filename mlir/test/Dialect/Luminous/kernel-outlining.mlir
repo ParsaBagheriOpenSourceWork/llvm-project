@@ -77,7 +77,7 @@ module {
     ^bb0(%arg4: index):
       scf.for %arg5 = %c0 to %c1024 step %c1024 {
         linalg.matvec {"linalg-max-memory-footprint" = 10000 : i64} ins(%arg0, %arg1 : memref<1024x1024xf32>, memref<1024xf32>) outs(%arg2 : memref<1024xf32>)
-      } {"linalg-max-memory-footprint" = 10000 : i64}
+      }
       luminous.yield
     }
     return
