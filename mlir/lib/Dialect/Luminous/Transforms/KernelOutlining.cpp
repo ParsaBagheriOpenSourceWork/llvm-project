@@ -54,16 +54,16 @@ namespace detail {
 struct DispatchBlockImpl {
   std::string name;
   OpBuilder builder;
-  LaunchOp launchOp;
+  Operation *launchOp;
   std::unique_ptr<Block> block;
   SmallVector<Value> args;
   SmallVector<Operation *> ops;
   SetVector<Value> visitedValues;
   BlockAndValueMapping cloningMap;
   SmallVector<DispatchBlockImpl *> dependencies;
-  DispatchBlockImpl(LaunchOp op, ArrayRef<DispatchBlock> deps,
+  DispatchBlockImpl(Operation *op, ArrayRef<DispatchBlock> deps,
                     const std::string &name)
-      : name(name), builder(op.getContext()), launchOp(op), block(new Block) {
+      : name(name), builder(op->getContext()), launchOp(op), block(new Block) {
     for (auto d : deps)
       dependencies.push_back(&(d.impl));
   }
@@ -75,10 +75,10 @@ struct DispatchBlockImpl {
 
 struct DispatchBlocksImpl {
   LuminousModuleOp luminousModule;
-  LaunchOp launchOp;
+  Operation *launchOp;
   using Blocks = SmallVector<std::unique_ptr<DispatchBlockImpl>>;
   Blocks blocks;
-  DispatchBlocksImpl(LuminousModuleOp module, LaunchOp op)
+  DispatchBlocksImpl(LuminousModuleOp module, Operation *op)
       : luminousModule(module), launchOp(op) {}
 };
 
@@ -104,7 +104,8 @@ static void handleOpsResults(detail::DispatchBlockImpl &impl, Operation *op) {
   // keeping track of ops results to determine whether the value is an
   // argument to the block or has been produced in the block
   for (auto result : op->getOpResults()) {
-    assert(!impl.visitedValues.contains(result) && "op has already been visited");
+    assert(!impl.visitedValues.contains(result) &&
+           "op has already been visited");
     impl.visitedValues.insert(result);
   }
 }
@@ -220,7 +221,7 @@ outline(PatternRewriter &rewriter, Location loc,
 }
 
 /// Outlines kernels for each dispatch blocks
-void outlineKernels(LaunchOp op, PatternRewriter &rewriter, Location loc,
+void outlineKernels(PatternRewriter &rewriter, Location loc,
                     LuminousModuleOp luminousModule,
                     detail::DispatchBlocksImpl &dispatchBlocks) {
   llvm::DenseMap<detail::DispatchBlockImpl *, Value> outlined;
@@ -269,7 +270,7 @@ static LuminousModuleOp getLuminousModule(Operation *op, Location loc,
   return createLuminousModule(rewriter, loc, module);
 }
 
-void defaultDispatchBuilderFn(LaunchOp launchOp,
+void defaultDispatchBuilderFn(Operation *launchOp,
                               DispatchBlocks &dispatchBlocks) {
   std::function<void(Block &)> bodyHandler;
   SmallVector<DispatchBlock> dependencies;
@@ -281,7 +282,7 @@ void defaultDispatchBuilderFn(LaunchOp launchOp,
         // making sure parent op hasn't already been dispatched, nested
         // dispatches are not allowed
         Operation *p = op.getParentOp();
-        while (!isa<LaunchOp>(p)) {
+        while (!isa<LaunchOp>(p) && !p->hasAttr(luminous::launchAttrName)) {
           assert(!p->hasAttr(luminous::maxMemoryAttrName) &&
                  "attempting a nested dispatch!");
           p = p->getParentOp();
@@ -301,7 +302,7 @@ void defaultDispatchBuilderFn(LaunchOp launchOp,
     }
   };
 
-  auto &body = launchOp.body().back();
+  auto &body = launchOp->getRegions().back().getBlocks().back();
   bodyHandler(body);
 }
 
@@ -310,18 +311,22 @@ void defaultDispatchBuilderFn(LaunchOp launchOp,
 
 namespace {
 
-struct KernelOutliningRewritePattern : public OpRewritePattern<LaunchOp> {
+template <typename LuminousLaunchT>
+struct KernelOutliningRewritePattern
+    : public OpRewritePattern<LuminousLaunchT> {
   DispatchBuilderFn dispatchBuilderFn;
   KernelOutliningRewritePattern(MLIRContext *ctx, DispatchBuilderFn fn)
-      : OpRewritePattern<LaunchOp>(ctx), dispatchBuilderFn(std::move(fn)) {}
-  LogicalResult matchAndRewrite(LaunchOp op,
+      : OpRewritePattern<LuminousLaunchT>(ctx),
+        dispatchBuilderFn(std::move(fn)) {}
+  LogicalResult matchAndRewrite(LuminousLaunchT op,
                                 PatternRewriter &rewriter) const override;
 };
 
 LogicalResult applyPatterns(func::FuncOp funcOp, const DispatchBuilderFn &fn) {
   MLIRContext *ctx = funcOp.getContext();
   RewritePatternSet patterns(ctx);
-  patterns.add<KernelOutliningRewritePattern>(ctx, fn);
+  patterns.add<KernelOutliningRewritePattern<LaunchOp>>(ctx, fn);
+  patterns.add<KernelOutliningRewritePattern<scf::ParallelOp>>(ctx, fn);
   return applyPatternsAndFoldGreedily(funcOp, std::move(patterns));
 }
 
@@ -339,8 +344,12 @@ struct LuminousKernelOutliningPass
   }
 };
 
-LogicalResult KernelOutliningRewritePattern::matchAndRewrite(
-    LaunchOp op, PatternRewriter &rewriter) const {
+template <typename LuminousLaunchT>
+LogicalResult KernelOutliningRewritePattern<LuminousLaunchT>::matchAndRewrite(
+    LuminousLaunchT op, PatternRewriter &rewriter) const {
+
+  if (isa<scf::ParallelOp>(op) && !op->hasAttr(luminous::launchAttrName))
+    return failure();
 
   // stop if already visited
   if (op->hasAttr(kernelOutliningVisited))
@@ -353,7 +362,7 @@ LogicalResult KernelOutliningRewritePattern::matchAndRewrite(
                                                                 op);
   DispatchBlocks dispatchBlocks(dispatchBlocksImpl);
   dispatchBuilderFn(op, dispatchBlocks);
-  outlineKernels(op, rewriter, loc, luminousModule, dispatchBlocksImpl);
+  outlineKernels(rewriter, loc, luminousModule, dispatchBlocksImpl);
   return success();
 }
 
