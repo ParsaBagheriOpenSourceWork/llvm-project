@@ -36,6 +36,8 @@ module {
 
 // -----
 
+/// Chaining dispatches
+
 module {
   func.func @test2(%arg0: memref<1024x1024xf32>, %arg1: memref<1024xf32>, %arg2: memref<1024xf32>, %arg3: memref<f32>) {
     %c1024 = arith.constant 1024 : index
@@ -68,6 +70,7 @@ module {
 
 // -----
 
+/// Dispatch inside for loop
 module {
   func.func @test3(%arg0: memref<1024x1024xf32>, %arg1: memref<1024xf32>, %arg2: memref<1024xf32>) {
     %c1024 = arith.constant 1024 : index
@@ -84,7 +87,8 @@ module {
 }
 
 // CHECK: luminous.module @[[CAPSULE:.*]]
-// CHECK: luminous.func @[[ASYNC_FN_0:.*]]
+// CHECK-NEXT: luminous.func @[[ASYNC_FN_0:.*]](%[[KERNEL_ARG0:.*]]: memref<1024x1024xf32>, %[[KERNEL_ARG1:.*]]: memref<1024xf32>, %[[KERNEL_ARG2:.*]]: memref<1024xf32>)
+// CHECK-NEXT: linalg.matvec {"linalg-max-memory-footprint" = 10000 : i64} ins(%[[KERNEL_ARG0]], %[[KERNEL_ARG1]] : memref<1024x1024xf32>, memref<1024xf32>) outs(%[[KERNEL_ARG2]] : memref<1024xf32>)
 // CHECK-LABEL: func.func @test3
 // CHECK: (%[[ARG0:.*]], %[[ARG1:.*]], %[[ARG2:.*]])
     // CHECK: %[[C1024:.*]] = arith.constant 1024 : index
@@ -92,5 +96,41 @@ module {
     // CHECK: luminous.launch shape (%[[C1024]]) step (%[[C1024]])
     // CHECK: ^[[BLOCK:.*]](%[[ARG3:.*]]):
         // CHECK: scf.for %[[ARG4:.*]] = %[[C0:.*]] to %[[C1024:.*]] step %[[C1024:.*]] {
-            // CHECK: %[[DISP0:.*]] = luminous.dispatch  @[[CAPSULE:.*]]::@[[ASYNC_FN_0:.*]] (%[[ARG0:.*]], %[[ARG1:.*]], %[[ARG2:.*]])
-            // CHECK: async.await %[[DISP0]] : !async.token
+            // CHECK-NEXT: %[[DISP0:.*]] = luminous.dispatch  @[[CAPSULE:.*]]::@[[ASYNC_FN_0:.*]] (%[[ARG0:.*]], %[[ARG1:.*]], %[[ARG2:.*]])
+            // CHECK-NEXT: async.await %[[DISP0]] : !async.token
+
+
+// -----
+
+/// Dispatch inside nested for loops
+
+module {
+  func.func @test3(%arg0: memref<1024x1024xf32>, %arg1: memref<1024xf32>, %arg2: memref<1024xf32>) {
+    %c1024 = arith.constant 1024 : index
+    %c0 = arith.constant 0 : index
+    luminous.launch shape (%c1024) step (%c1024){
+    ^bb0(%arg4: index):
+      scf.for %arg5 = %c0 to %c1024 step %c1024 {
+        scf.for %arg6 = %c0 to %c1024 step %c1024 {
+            linalg.matvec {"linalg-max-memory-footprint" = 10000 : i64} ins(%arg0, %arg1 : memref<1024x1024xf32>, memref<1024xf32>) outs(%arg2 : memref<1024xf32>)
+        }
+      }
+      luminous.yield
+    }
+    return
+  }
+}
+
+// CHECK: luminous.module @[[CAPSULE:.*]]
+// CHECK-NEXT: luminous.func @[[ASYNC_FN_0:.*]](%[[KERNEL_ARG0:.*]]: memref<1024x1024xf32>, %[[KERNEL_ARG1:.*]]: memref<1024xf32>, %[[KERNEL_ARG2:.*]]: memref<1024xf32>)
+// CHECK-NEXT: linalg.matvec {"linalg-max-memory-footprint" = 10000 : i64} ins(%[[KERNEL_ARG0]], %[[KERNEL_ARG1]] : memref<1024x1024xf32>, memref<1024xf32>) outs(%[[KERNEL_ARG2]] : memref<1024xf32>)
+// CHECK-LABEL: func.func @test3
+// CHECK: (%[[ARG0:.*]], %[[ARG1:.*]], %[[ARG2:.*]])
+    // CHECK: %[[C1024:.*]] = arith.constant 1024 : index
+    // CHECK: %[[C0:.*]] = arith.constant 0 : index
+    // CHECK: luminous.launch shape (%[[C1024]]) step (%[[C1024]])
+    // CHECK: ^[[BLOCK:.*]](%[[ARG3:.*]]):
+        // CHECK: scf.for %[[ARG4:.*]] = %[[C0:.*]] to %[[C1024:.*]] step %[[C1024:.*]] {
+            // CHECK: scf.for %[[ARG5:.*]] = %[[C0:.*]] to %[[C1024:.*]] step %[[C1024:.*]] {
+                // CHECK-NEXT: %[[DISP0:.*]] = luminous.dispatch  @[[CAPSULE:.*]]::@[[ASYNC_FN_0:.*]] (%[[ARG0:.*]], %[[ARG1:.*]], %[[ARG2:.*]])
+                // CHECK-NEXT: async.await %[[DISP0]] : !async.token
