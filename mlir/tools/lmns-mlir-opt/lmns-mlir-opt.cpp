@@ -39,8 +39,8 @@ struct ReplaceFuncWithDecl : public OpRewritePattern<ModuleOp> {
     OpBuilder::InsertionGuard g(rewriter);
     rewriter.setInsertionPoint(op);
     for (auto &bodyOp : *op.getBody()) {
-      if (auto fnOp = dyn_cast<func::FuncOp>(bodyOp)) {
-        auto funcOp = rewriter.create<func::FuncOp>(
+      if (auto fnOp = dyn_cast<LLVM::LLVMFuncOp>(bodyOp)) {
+        auto funcOp = rewriter.create<LLVM::LLVMFuncOp>(
             fnOp->getLoc(), fnOp.getName(), fnOp.getFunctionType());
         funcOp->setAttr("llvm.emit_c_interface",
                         UnitAttr::get(op->getContext()));

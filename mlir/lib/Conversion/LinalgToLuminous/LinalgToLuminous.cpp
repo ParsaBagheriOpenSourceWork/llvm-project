@@ -1,4 +1,4 @@
-//===- SCFToLuminous.cpp - SCF to Luminous conversion ---------------------===//
+//===- LinalgToLuminous.cpp - Linalg to Luminous conversion ---------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,9 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// This file implements a pass to convert scf.parallel operations into luminous
-// dispatches. This file contains copies of some static functions and types
-// from mlir/lib/Dialect/Async/Transform/AsyncParallelFor.cpp
+// This file implements a pass to convert linalg operations into luminous
+// launches.
 //
 //===----------------------------------------------------------------------===//
 
