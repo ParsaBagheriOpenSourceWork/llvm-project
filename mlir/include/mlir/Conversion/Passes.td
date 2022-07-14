@@ -695,6 +695,34 @@ def ConvertParallelLoopToLuminousLaunch :
 }
 
 //===----------------------------------------------------------------------===//
+// LuminousToStandard
+//===----------------------------------------------------------------------===//
+
+def ConvertLuminousToStandard :
+    Pass<"convert-luminous-to-std", "ModuleOp"> {
+  let summary = "Convert luminous module ops to module ops";
+  let constructor = "mlir::createConvertLuminousToStandardPass()";
+  let dependentDialects = ["luminous::LuminousDialect",
+                           "func::FuncDialect",
+                           "async::AsyncDialect"];
+}
+
+//===----------------------------------------------------------------------===//
+// LuminousToLLVM
+//===----------------------------------------------------------------------===//
+
+def ConvertLuminousToLLVM :
+    Pass<"convert-luminous-to-llvm", "ModuleOp"> {
+  let summary = "Convert luminous dispatch ops to llvm.call ops and lowers their "
+                "callees to llvm";
+  let constructor = "mlir::createConvertLuminousToLLVMPass()";
+  let dependentDialects = ["luminous::LuminousDialect",
+                           "func::FuncDialect",
+                           "async::AsyncDialect",
+                           "LLVM::LLVMDialect"];
+}
+
+//===----------------------------------------------------------------------===//
 // LinalgToLuminous
 //===----------------------------------------------------------------------===//
 
