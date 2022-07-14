@@ -707,6 +707,20 @@ def ConvertLuminousToStandard :
   let constructor = "mlir::createConvertLuminousToStandardPass()";
   let dependentDialects = ["luminous::LuminousDialect",
                            "func::FuncDialect",
+                           "async::AsyncDialect"];
+}
+
+//===----------------------------------------------------------------------===//
+// LuminousToLLVM
+//===----------------------------------------------------------------------===//
+
+def ConvertLuminousToLLVM :
+    Pass<"convert-luminous-to-llvm", "ModuleOp"> {
+  let summary = "Convert luminous dispatch ops to llvm.call ops and lowers their "
+                "callees to llvm";
+  let constructor = "mlir::createConvertLuminousToLLVMPass()";
+  let dependentDialects = ["luminous::LuminousDialect",
+                           "func::FuncDialect",
                            "async::AsyncDialect",
                            "LLVM::LLVMDialect"];
 }

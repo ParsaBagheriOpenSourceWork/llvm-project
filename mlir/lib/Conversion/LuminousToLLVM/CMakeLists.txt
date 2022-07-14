@@ -1,8 +1,8 @@
-add_mlir_conversion_library(MLIRLuminousToStandard
-        LuminousToStandard.cpp
+add_mlir_conversion_library(MLIRLuminousToLLVM
+        LuminousToLLVM.cpp
 
     ADDITIONAL_HEADER_DIRS
-    ${MLIR_MAIN_INCLUDE_DIR}/mlir/Conversion/LuminousToStandard
+    ${MLIR_MAIN_INCLUDE_DIR}/mlir/Conversion/LuminousToLLVM
 
     DEPENDS
     MLIRConversionPassIncGen
@@ -15,6 +15,7 @@ add_mlir_conversion_library(MLIRLuminousToStandard
     MLIRControlFlowDialect
     MLIRLuminous
     MLIRLinalgDialect
+    MLIRLLVMDialect
     MLIRAsyncDialect
     MLIRSCFDialect
     MLIRTransforms
