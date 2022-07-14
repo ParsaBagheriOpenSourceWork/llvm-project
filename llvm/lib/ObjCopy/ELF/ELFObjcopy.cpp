@@ -53,8 +53,7 @@ using namespace llvm::object;
 using SectionPred = std::function<bool(const SectionBase &Sec)>;
 
 static bool isDebugSection(const SectionBase &Sec) {
-  return StringRef(Sec.Name).startswith(".debug") ||
-         StringRef(Sec.Name).startswith(".zdebug") || Sec.Name == ".gdb_index";
+  return StringRef(Sec.Name).startswith(".debug") || Sec.Name == ".gdb_index";
 }
 
 static bool isDWOSection(const SectionBase &Sec) {
@@ -630,70 +629,6 @@ static Error handleArgs(const CommonConfig &Config, const ELFConfig &ELFConfig,
   if (Error E = updateAndRemoveSymbols(Config, ELFConfig, Obj))
     return E;
 
-  if (!Config.SectionsToRename.empty()) {
-    std::vector<RelocationSectionBase *> RelocSections;
-    DenseSet<SectionBase *> RenamedSections;
-    for (SectionBase &Sec : Obj.sections()) {
-      auto *RelocSec = dyn_cast<RelocationSectionBase>(&Sec);
-      const auto Iter = Config.SectionsToRename.find(Sec.Name);
-      if (Iter != Config.SectionsToRename.end()) {
-        const SectionRename &SR = Iter->second;
-        Sec.Name = std::string(SR.NewName);
-        if (SR.NewFlags.hasValue())
-          setSectionFlagsAndType(Sec, SR.NewFlags.getValue());
-        RenamedSections.insert(&Sec);
-      } else if (RelocSec && !(Sec.Flags & SHF_ALLOC))
-        // Postpone processing relocation sections which are not specified in
-        // their explicit '--rename-section' commands until after their target
-        // sections are renamed.
-        // Dynamic relocation sections (i.e. ones with SHF_ALLOC) should be
-        // renamed only explicitly. Otherwise, renaming, for example, '.got.plt'
-        // would affect '.rela.plt', which is not desirable.
-        RelocSections.push_back(RelocSec);
-    }
-
-    // Rename relocation sections according to their target sections.
-    for (RelocationSectionBase *RelocSec : RelocSections) {
-      auto Iter = RenamedSections.find(RelocSec->getSection());
-      if (Iter != RenamedSections.end())
-        RelocSec->Name = (RelocSec->getNamePrefix() + (*Iter)->Name).str();
-    }
-  }
-
-  // Add a prefix to allocated sections and their relocation sections. This
-  // should be done after renaming the section by Config.SectionToRename to
-  // imitate the GNU objcopy behavior.
-  if (!Config.AllocSectionsPrefix.empty()) {
-    DenseSet<SectionBase *> PrefixedSections;
-    for (SectionBase &Sec : Obj.sections()) {
-      if (Sec.Flags & SHF_ALLOC) {
-        Sec.Name = (Config.AllocSectionsPrefix + Sec.Name).str();
-        PrefixedSections.insert(&Sec);
-      } else if (auto *RelocSec = dyn_cast<RelocationSectionBase>(&Sec)) {
-        // Rename relocation sections associated to the allocated sections.
-        // For example, if we rename .text to .prefix.text, we also rename
-        // .rel.text to .rel.prefix.text.
-        //
-        // Dynamic relocation sections (SHT_REL[A] with SHF_ALLOC) are handled
-        // above, e.g., .rela.plt is renamed to .prefix.rela.plt, not
-        // .rela.prefix.plt since GNU objcopy does so.
-        const SectionBase *TargetSec = RelocSec->getSection();
-        if (TargetSec && (TargetSec->Flags & SHF_ALLOC)) {
-          // If the relocation section comes *after* the target section, we
-          // don't add Config.AllocSectionsPrefix because we've already added
-          // the prefix to TargetSec->Name. Otherwise, if the relocation
-          // section comes *before* the target section, we add the prefix.
-          if (PrefixedSections.count(TargetSec))
-            Sec.Name = (RelocSec->getNamePrefix() + TargetSec->Name).str();
-          else
-            Sec.Name = (RelocSec->getNamePrefix() + Config.AllocSectionsPrefix +
-                        TargetSec->Name)
-                           .str();
-        }
-      }
-    }
-  }
-
   if (!Config.SetSectionAlignment.empty()) {
     for (SectionBase &Sec : Obj.sections()) {
       auto I = Config.SetSectionAlignment.find(Sec.Name);
@@ -751,6 +686,70 @@ static Error handleArgs(const CommonConfig &Config, const ELFConfig &ELFConfig,
     }
   }
 
+  if (!Config.SectionsToRename.empty()) {
+    std::vector<RelocationSectionBase *> RelocSections;
+    DenseSet<SectionBase *> RenamedSections;
+    for (SectionBase &Sec : Obj.sections()) {
+      auto *RelocSec = dyn_cast<RelocationSectionBase>(&Sec);
+      const auto Iter = Config.SectionsToRename.find(Sec.Name);
+      if (Iter != Config.SectionsToRename.end()) {
+        const SectionRename &SR = Iter->second;
+        Sec.Name = std::string(SR.NewName);
+        if (SR.NewFlags)
+          setSectionFlagsAndType(Sec, SR.NewFlags.getValue());
+        RenamedSections.insert(&Sec);
+      } else if (RelocSec && !(Sec.Flags & SHF_ALLOC))
+        // Postpone processing relocation sections which are not specified in
+        // their explicit '--rename-section' commands until after their target
+        // sections are renamed.
+        // Dynamic relocation sections (i.e. ones with SHF_ALLOC) should be
+        // renamed only explicitly. Otherwise, renaming, for example, '.got.plt'
+        // would affect '.rela.plt', which is not desirable.
+        RelocSections.push_back(RelocSec);
+    }
+
+    // Rename relocation sections according to their target sections.
+    for (RelocationSectionBase *RelocSec : RelocSections) {
+      auto Iter = RenamedSections.find(RelocSec->getSection());
+      if (Iter != RenamedSections.end())
+        RelocSec->Name = (RelocSec->getNamePrefix() + (*Iter)->Name).str();
+    }
+  }
+
+  // Add a prefix to allocated sections and their relocation sections. This
+  // should be done after renaming the section by Config.SectionToRename to
+  // imitate the GNU objcopy behavior.
+  if (!Config.AllocSectionsPrefix.empty()) {
+    DenseSet<SectionBase *> PrefixedSections;
+    for (SectionBase &Sec : Obj.sections()) {
+      if (Sec.Flags & SHF_ALLOC) {
+        Sec.Name = (Config.AllocSectionsPrefix + Sec.Name).str();
+        PrefixedSections.insert(&Sec);
+      } else if (auto *RelocSec = dyn_cast<RelocationSectionBase>(&Sec)) {
+        // Rename relocation sections associated to the allocated sections.
+        // For example, if we rename .text to .prefix.text, we also rename
+        // .rel.text to .rel.prefix.text.
+        //
+        // Dynamic relocation sections (SHT_REL[A] with SHF_ALLOC) are handled
+        // above, e.g., .rela.plt is renamed to .prefix.rela.plt, not
+        // .rela.prefix.plt since GNU objcopy does so.
+        const SectionBase *TargetSec = RelocSec->getSection();
+        if (TargetSec && (TargetSec->Flags & SHF_ALLOC)) {
+          // If the relocation section comes *after* the target section, we
+          // don't add Config.AllocSectionsPrefix because we've already added
+          // the prefix to TargetSec->Name. Otherwise, if the relocation
+          // section comes *before* the target section, we add the prefix.
+          if (PrefixedSections.count(TargetSec))
+            Sec.Name = (RelocSec->getNamePrefix() + TargetSec->Name).str();
+          else
+            Sec.Name = (RelocSec->getNamePrefix() + Config.AllocSectionsPrefix +
+                        TargetSec->Name)
+                           .str();
+        }
+      }
+    }
+  }
+
   if (ELFConfig.EntryExpr)
     Obj.Entry = ELFConfig.EntryExpr(Obj.Entry);
   return Error::success();
@@ -774,7 +773,7 @@ Error objcopy::elf::executeObjcopyOnIHex(const CommonConfig &Config,
     return Obj.takeError();
 
   const ElfType OutputElfType =
-      getOutputElfType(Config.OutputArch.getValueOr(MachineInfo()));
+      getOutputElfType(Config.OutputArch.value_or(MachineInfo()));
   if (Error E = handleArgs(Config, ELFConfig, **Obj))
     return E;
   return writeOutput(Config, **Obj, Out, OutputElfType);
@@ -792,7 +791,7 @@ Error objcopy::elf::executeObjcopyOnRawBinary(const CommonConfig &Config,
   // Prefer OutputArch (-O<format>) if set, otherwise fallback to BinaryArch
   // (-B<arch>).
   const ElfType OutputElfType =
-      getOutputElfType(Config.OutputArch.getValueOr(MachineInfo()));
+      getOutputElfType(Config.OutputArch.value_or(MachineInfo()));
   if (Error E = handleArgs(Config, ELFConfig, **Obj))
     return E;
   return writeOutput(Config, **Obj, Out, OutputElfType);

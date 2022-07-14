@@ -11,11 +11,12 @@ add_mlir_conversion_library(MLIRLuminousToStandard
     Core
 
     LINK_LIBS PUBLIC
-    MLIRArithmetic
-    MLIRControlFlow
+    MLIRArithmeticDialect
+    MLIRControlFlowDialect
     MLIRLuminous
-    MLIRLinalg
-    MLIRAsync
-    MLIRSCF
+    MLIRLinalgDialect
+    MLIRAsyncDialect
+    MLIRLLVMDialect
+    MLIRSCFDialect
     MLIRTransforms
     )

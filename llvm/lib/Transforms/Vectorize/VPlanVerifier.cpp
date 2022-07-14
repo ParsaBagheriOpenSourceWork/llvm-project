@@ -43,17 +43,20 @@ static bool hasDuplicates(const SmallVectorImpl<VPBlockBase *> &VPBlockVec) {
 /// \p Region. Checks in this function are generic for VPBlockBases. They are
 /// not specific for VPBasicBlocks or VPRegionBlocks.
 static void verifyBlocksInRegion(const VPRegionBlock *Region) {
-  for (const VPBlockBase *VPB :
-       make_range(df_iterator<const VPBlockBase *>::begin(Region->getEntry()),
-                  df_iterator<const VPBlockBase *>::end(Region->getExit()))) {
+  for (const VPBlockBase *VPB : make_range(
+           df_iterator<const VPBlockBase *>::begin(Region->getEntry()),
+           df_iterator<const VPBlockBase *>::end(Region->getExiting()))) {
     // Check block's parent.
     assert(VPB->getParent() == Region && "VPBlockBase has wrong parent");
 
+    auto *VPBB = dyn_cast<VPBasicBlock>(VPB);
     // Check block's condition bit.
-    if (VPB->getNumSuccessors() > 1)
-      assert(VPB->getCondBit() && "Missing condition bit!");
+    if (VPB->getNumSuccessors() > 1 || (VPBB && VPBB->isExiting()))
+      assert(VPBB && VPBB->getTerminator() &&
+             "Block has multiple successors but doesn't "
+             "have a proper branch recipe!");
     else
-      assert(!VPB->getCondBit() && "Unexpected condition bit!");
+      assert((!VPBB || !VPBB->getTerminator()) && "Unexpected branch recipe!");
 
     // Check block's successors.
     const auto &Successors = VPB->getSuccessors();
@@ -94,13 +97,14 @@ static void verifyBlocksInRegion(const VPRegionBlock *Region) {
 /// VPBlockBases. Do not recurse inside nested VPRegionBlocks.
 static void verifyRegion(const VPRegionBlock *Region) {
   const VPBlockBase *Entry = Region->getEntry();
-  const VPBlockBase *Exit = Region->getExit();
+  const VPBlockBase *Exiting = Region->getExiting();
 
-  // Entry and Exit shouldn't have any predecessor/successor, respectively.
+  // Entry and Exiting shouldn't have any predecessor/successor, respectively.
   assert(!Entry->getNumPredecessors() && "Region entry has predecessors.");
-  assert(!Exit->getNumSuccessors() && "Region exit has successors.");
+  assert(!Exiting->getNumSuccessors() &&
+         "Region exiting block has successors.");
   (void)Entry;
-  (void)Exit;
+  (void)Exiting;
 
   verifyBlocksInRegion(Region);
 }
@@ -111,9 +115,9 @@ static void verifyRegionRec(const VPRegionBlock *Region) {
   verifyRegion(Region);
 
   // Recurse inside nested regions.
-  for (const VPBlockBase *VPB :
-       make_range(df_iterator<const VPBlockBase *>::begin(Region->getEntry()),
-                  df_iterator<const VPBlockBase *>::end(Region->getExit()))) {
+  for (const VPBlockBase *VPB : make_range(
+           df_iterator<const VPBlockBase *>::begin(Region->getEntry()),
+           df_iterator<const VPBlockBase *>::end(Region->getExiting()))) {
     if (const auto *SubRegion = dyn_cast<VPRegionBlock>(VPB))
       verifyRegionRec(SubRegion);
   }
@@ -138,8 +142,17 @@ bool VPlanVerifier::verifyPlanIsValid(const VPlan &Plan) {
     // other recipes in between.
     auto RecipeI = VPBB->begin();
     auto End = VPBB->end();
-    while (RecipeI != End && RecipeI->isPhi())
+    unsigned NumActiveLaneMaskPhiRecipes = 0;
+    while (RecipeI != End && RecipeI->isPhi()) {
+      if (isa<VPActiveLaneMaskPHIRecipe>(RecipeI))
+        NumActiveLaneMaskPhiRecipes++;
       RecipeI++;
+    }
+
+    if (NumActiveLaneMaskPhiRecipes > 1) {
+      errs() << "There should be no more than one VPActiveLaneMaskPHIRecipe";
+      return false;
+    }
 
     while (RecipeI != End) {
       if (RecipeI->isPhi() && !isa<VPBlendRecipe>(&*RecipeI)) {
@@ -170,22 +183,23 @@ bool VPlanVerifier::verifyPlanIsValid(const VPlan &Plan) {
     return false;
   }
 
-  const VPBasicBlock *Exit = dyn_cast<VPBasicBlock>(TopRegion->getExit());
-  if (!Exit) {
-    errs() << "VPlan exit block is not a VPBasicBlock\n";
+  const VPBasicBlock *Exiting = dyn_cast<VPBasicBlock>(TopRegion->getExiting());
+  if (!Exiting) {
+    errs() << "VPlan exiting block is not a VPBasicBlock\n";
     return false;
   }
 
-  if (Exit->empty()) {
-    errs() << "VPlan vector loop exit must end with BranchOnCount "
-              "VPInstruction but is empty\n";
+  if (Exiting->empty()) {
+    errs() << "VPlan vector loop exiting block must end with BranchOnCount or "
+              "BranchOnCond VPInstruction but is empty\n";
     return false;
   }
 
-  auto *LastInst = dyn_cast<VPInstruction>(std::prev(Exit->end()));
-  if (!LastInst || LastInst->getOpcode() != VPInstruction::BranchOnCount) {
-    errs() << "VPlan vector loop exit must end with BranchOnCount "
-              "VPInstruction\n";
+  auto *LastInst = dyn_cast<VPInstruction>(std::prev(Exiting->end()));
+  if (!LastInst || (LastInst->getOpcode() != VPInstruction::BranchOnCount &&
+                    LastInst->getOpcode() != VPInstruction::BranchOnCond)) {
+    errs() << "VPlan vector loop exit must end with BranchOnCount or "
+              "BranchOnCond VPInstruction\n";
     return false;
   }
 
@@ -197,8 +211,8 @@ bool VPlanVerifier::verifyPlanIsValid(const VPlan &Plan) {
       errs() << "region entry block has predecessors\n";
       return false;
     }
-    if (Region->getExit()->getNumSuccessors() != 0) {
-      errs() << "region exit block has successors\n";
+    if (Region->getExiting()->getNumSuccessors() != 0) {
+      errs() << "region exiting block has successors\n";
       return false;
     }
   }

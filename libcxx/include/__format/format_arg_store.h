@@ -14,11 +14,11 @@
 #  pragma GCC system_header
 #endif
 
+#include <__concepts/arithmetic.h>
+#include <__concepts/same_as.h>
 #include <__config>
 #include <__format/concepts.h>
 #include <__format/format_arg.h>
-#include <__iterator/data.h>
-#include <__iterator/size.h>
 #include <cstring>
 #include <string>
 #include <string_view>
@@ -173,13 +173,15 @@ _LIBCPP_HIDE_FROM_ABI basic_format_arg<_Context> __create_format_arg(_Tp&& __val
   else if constexpr (__arg == __arg_t::__unsigned_long_long)
     return basic_format_arg<_Context>{__arg, static_cast<unsigned long long>(__value)};
   else if constexpr (__arg == __arg_t::__string_view)
-    // When the _Traits or _Allocator are different an implicit conversion will
-    // fail.
-    //
-    // Note since the input can be an array use the non-member functions to
-    // extract the constructor arguments.
-    return basic_format_arg<_Context>{
-        __arg, basic_string_view<typename _Context::char_type>{_VSTD::data(__value), _VSTD::size(__value)}};
+    // Using std::size on a character array will add the NUL-terminator to the size.
+    if constexpr (is_array_v<remove_cvref_t<_Tp>>)
+      return basic_format_arg<_Context>{
+          __arg, basic_string_view<typename _Context::char_type>{__value, extent_v<remove_cvref_t<_Tp>> - 1}};
+    else
+      // When the _Traits or _Allocator are different an implicit conversion will
+      // fail.
+      return basic_format_arg<_Context>{
+          __arg, basic_string_view<typename _Context::char_type>{__value.data(), __value.size()}};
   else if constexpr (__arg == __arg_t::__ptr)
     return basic_format_arg<_Context>{__arg, static_cast<const void*>(__value)};
   else if constexpr (__arg == __arg_t::__handle)
@@ -195,7 +197,7 @@ _LIBCPP_HIDE_FROM_ABI void __create_packed_storage(uint64_t& __types, __basic_fo
   int __shift = 0;
   (
       [&] {
-        basic_format_arg<_Context> __arg = __create_format_arg<_Context>(_VSTD::forward<_Args>(__args));
+        basic_format_arg<_Context> __arg = __create_format_arg<_Context>(__args);
         if (__shift != 0)
           __types |= static_cast<uint64_t>(__arg.__type_) << __shift;
         else
@@ -209,7 +211,7 @@ _LIBCPP_HIDE_FROM_ABI void __create_packed_storage(uint64_t& __types, __basic_fo
 
 template <class _Context, class... _Args>
 _LIBCPP_HIDE_FROM_ABI void __store_basic_format_arg(basic_format_arg<_Context>* __data, _Args&&... __args) noexcept {
-  ([&] { *__data++ = __create_format_arg<_Context>(_VSTD::forward<_Args>(__args)); }(), ...);
+  ([&] { *__data++ = __create_format_arg<_Context>(__args); }(), ...);
 }
 
 template <class _Context, size_t N>
@@ -228,12 +230,12 @@ struct __unpacked_format_arg_store {
 template <class _Context, class... _Args>
 struct _LIBCPP_TEMPLATE_VIS __format_arg_store {
   _LIBCPP_HIDE_FROM_ABI
-  __format_arg_store(_Args&&... __args) noexcept {
+  __format_arg_store(_Args&... __args) noexcept {
     if constexpr (sizeof...(_Args) != 0) {
       if constexpr (__format::__use_packed_format_arg_store(sizeof...(_Args)))
-        __format::__create_packed_storage(__storage.__types_, __storage.__values_, _VSTD::forward<_Args>(__args)...);
+        __format::__create_packed_storage(__storage.__types_, __storage.__values_, __args...);
       else
-        __format::__store_basic_format_arg<_Context>(__storage.__args_, _VSTD::forward<_Args>(__args)...);
+        __format::__store_basic_format_arg<_Context>(__storage.__args_, __args...);
     }
   }
 

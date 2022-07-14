@@ -13,7 +13,7 @@
 #include "mlir/Dialect/Luminous/IR/LuminousDialect.h"
 #include "mlir/Dialect/Luminous/Passes.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
-#include "mlir/Dialect/SCF/SCF.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BlockAndValueMapping.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"

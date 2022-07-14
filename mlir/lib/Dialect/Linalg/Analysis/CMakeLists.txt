@@ -9,6 +9,6 @@ add_mlir_dialect_library(MLIRLinalgAnalysis
   MLIRAffineAnalysis
   MLIRAnalysis
   MLIRIR
-  MLIRLinalg
-  MLIRMemRef
+  MLIRLinalgDialect
+  MLIRMemRefDialect
   )
