@@ -46,6 +46,7 @@ public:
   void Check(const ArraySpec &);
   void Check(const DeclTypeSpec &, bool canHaveAssumedTypeParameters);
   void Check(const Symbol &);
+  void CheckCommonBlock(const Symbol &);
   void Check(const Scope &);
   const Procedure *Characterize(const Symbol &);
 
@@ -90,7 +91,7 @@ private:
     return innermostSymbol_ && IsPureProcedure(*innermostSymbol_);
   }
   bool InElemental() const {
-    return innermostSymbol_ && innermostSymbol_->attrs().test(Attr::ELEMENTAL);
+    return innermostSymbol_ && IsElementalProcedure(*innermostSymbol_);
   }
   bool InFunction() const {
     return innermostSymbol_ && IsFunction(*innermostSymbol_);
@@ -104,7 +105,7 @@ private:
     }
   }
   bool IsResultOkToDiffer(const FunctionResult &);
-  void CheckBindCName(const Symbol &);
+  void CheckBindC(const Symbol &);
   // Check functions for defined I/O procedures
   void CheckDefinedIoProc(
       const Symbol &, const GenericDetails &, GenericKind::DefinedIo);
@@ -236,7 +237,7 @@ void CheckHelper::Check(const Symbol &symbol) {
   if (symbol.attrs().test(Attr::VOLATILE)) {
     CheckVolatile(symbol, derived);
   }
-  CheckBindCName(symbol);
+  CheckBindC(symbol);
   if (isDone) {
     return; // following checks do not apply
   }
@@ -318,13 +319,12 @@ void CheckHelper::Check(const Symbol &symbol) {
       messages_.Say(
           "An assumed-length CHARACTER(*) function cannot return an array"_err_en_US);
     }
-    if (symbol.attrs().test(Attr::PURE)) {
-      messages_.Say(
-          "An assumed-length CHARACTER(*) function cannot be PURE"_err_en_US);
-    }
-    if (symbol.attrs().test(Attr::ELEMENTAL)) {
+    if (IsElementalProcedure(symbol)) {
       messages_.Say(
           "An assumed-length CHARACTER(*) function cannot be ELEMENTAL"_err_en_US);
+    } else if (IsPureProcedure(symbol)) {
+      messages_.Say(
+          "An assumed-length CHARACTER(*) function cannot be PURE"_err_en_US);
     }
     if (const Symbol * result{FindFunctionResult(symbol)}) {
       if (IsPointer(*result)) {
@@ -351,6 +351,10 @@ void CheckHelper::Check(const Symbol &symbol) {
           "A dummy argument may not have the SAVE attribute"_err_en_US);
     }
   } else if (IsFunctionResult(symbol)) {
+    if (IsNamedConstant(symbol)) {
+      messages_.Say(
+          "A function result may not also be a named constant"_err_en_US);
+    }
     if (!symbol.test(Symbol::Flag::InDataStmt) /*caught elsewhere*/ &&
         IsSaved(symbol)) {
       messages_.Say(
@@ -370,6 +374,8 @@ void CheckHelper::Check(const Symbol &symbol) {
         symbol.name());
   }
 }
+
+void CheckHelper::CheckCommonBlock(const Symbol &symbol) { CheckBindC(symbol); }
 
 void CheckHelper::CheckValue(
     const Symbol &symbol, const DerivedTypeSpec *derived) { // C863 - C865
@@ -663,7 +669,7 @@ void CheckHelper::CheckPointerInitialization(const Symbol &symbol) {
           context_.Say("Procedure pointer '%s' initializer '%s' is neither "
                        "an external nor a module procedure"_err_en_US,
               symbol.name(), ultimate.name());
-        } else if (ultimate.attrs().test(Attr::ELEMENTAL)) {
+        } else if (IsElementalProcedure(ultimate)) {
           context_.Say("Procedure pointer '%s' cannot be initialized with the "
                        "elemental procedure '%s"_err_en_US,
               symbol.name(), ultimate.name());
@@ -772,9 +778,9 @@ void CheckHelper::CheckProcEntity(
     }
     const Symbol *interface { details.interface().symbol() };
     if (!symbol.attrs().test(Attr::INTRINSIC) &&
-        (symbol.attrs().test(Attr::ELEMENTAL) ||
+        (IsElementalProcedure(symbol) ||
             (interface && !interface->attrs().test(Attr::INTRINSIC) &&
-                interface->attrs().test(Attr::ELEMENTAL)))) {
+                IsElementalProcedure(*interface)))) {
       // There's no explicit constraint or "shall" that we can find in the
       // standard for this check, but it seems to be implied in multiple
       // sites, and ELEMENTAL non-intrinsic actual arguments *are*
@@ -814,7 +820,7 @@ void CheckHelper::CheckProcEntity(
               "to procedure pointer '%s'"_err_en_US,
               interface->name(), symbol.name());
         }
-      } else if (interface->attrs().test(Attr::ELEMENTAL)) {
+      } else if (IsElementalProcedure(*interface)) {
         messages_.Say("Procedure pointer '%s' may not be ELEMENTAL"_err_en_US,
             symbol.name()); // C1517
       }
@@ -924,7 +930,7 @@ void CheckHelper::CheckSubprogram(
       }
     }
   }
-  if (symbol.attrs().test(Attr::ELEMENTAL)) {
+  if (IsElementalProcedure(symbol)) {
     // See comment on the similar check in CheckProcEntity()
     if (details.isDummy()) {
       messages_.Say("A dummy procedure may not be ELEMENTAL"_err_en_US);
@@ -1654,8 +1660,8 @@ void CheckHelper::CheckProcBinding(
             "An overridden pure type-bound procedure binding must also be pure"_err_en_US);
         return;
       }
-      if (!binding.symbol().attrs().test(Attr::ELEMENTAL) &&
-          overriddenBinding->symbol().attrs().test(Attr::ELEMENTAL)) {
+      if (!IsElementalProcedure(binding.symbol()) &&
+          IsElementalProcedure(overriddenBinding->symbol())) {
         SayWithDeclaration(*overridden,
             "A type-bound procedure and its override must both, or neither, be ELEMENTAL"_err_en_US);
         return;
@@ -1724,6 +1730,9 @@ void CheckHelper::Check(const Scope &scope) {
     }
     for (const auto &pair : scope) {
       Check(*pair.second);
+    }
+    for (const auto &pair : scope.commonBlocks()) {
+      CheckCommonBlock(*pair.second);
     }
     int mainProgCnt{0};
     for (const Scope &child : scope.children()) {
@@ -1859,9 +1868,8 @@ void CheckHelper::CheckGenericOps(const Scope &scope) {
 
 static const std::string *DefinesBindCName(const Symbol &symbol) {
   const auto *subp{symbol.detailsIf<SubprogramDetails>()};
-  if ((subp && !subp->isInterface() &&
-          ClassifyProcedure(symbol) != ProcedureDefinitionClass::Internal) ||
-      symbol.has<ObjectEntityDetails>()) {
+  if ((subp && !subp->isInterface()) || symbol.has<ObjectEntityDetails>() ||
+      symbol.has<CommonBlockDetails>()) {
     // Symbol defines data or entry point
     return symbol.GetBindName();
   } else {
@@ -1869,21 +1877,41 @@ static const std::string *DefinesBindCName(const Symbol &symbol) {
   }
 }
 
-// Check that BIND(C) names are distinct
-void CheckHelper::CheckBindCName(const Symbol &symbol) {
+void CheckHelper::CheckBindC(const Symbol &symbol) {
+  if (!symbol.attrs().test(Attr::BIND_C)) {
+    return;
+  }
+  CheckConflicting(symbol, Attr::BIND_C, Attr::PARAMETER);
+  if (symbol.has<ObjectEntityDetails>() && !symbol.owner().IsModule()) {
+    messages_.Say(symbol.name(),
+        "A variable with BIND(C) attribute may only appear in the specification part of a module"_err_en_US);
+    context_.SetError(symbol);
+  }
   if (const std::string * name{DefinesBindCName(symbol)}) {
     auto pair{bindC_.emplace(*name, symbol)};
     if (!pair.second) {
       const Symbol &other{*pair.first->second};
-      if (DefinesBindCName(other) && !context_.HasError(other)) {
-        if (auto *msg{messages_.Say(
-                "Two symbols have the same BIND(C) name '%s'"_err_en_US,
+      if (symbol.has<CommonBlockDetails>() && other.has<CommonBlockDetails>() &&
+          symbol.name() == other.name()) {
+        // Two common blocks can have the same BIND(C) name so long as
+        // they're not in the same scope.
+      } else if (!context_.HasError(other)) {
+        if (auto *msg{messages_.Say(symbol.name(),
+                "Two entities have the same BIND(C) name '%s'"_err_en_US,
                 *name)}) {
-          msg->Attach(other.name(), "Conflicting symbol"_en_US);
+          msg->Attach(other.name(), "Conflicting declaration"_en_US);
         }
         context_.SetError(symbol);
         context_.SetError(other);
       }
+    }
+  }
+  if (const auto *proc{symbol.detailsIf<ProcEntityDetails>()}) {
+    if (!proc->interface().symbol() ||
+        !proc->interface().symbol()->attrs().test(Attr::BIND_C)) {
+      messages_.Say(symbol.name(),
+          "An interface name with BIND attribute must be specified if the BIND attribute is specified in a procedure declaration statement"_err_en_US);
+      context_.SetError(symbol);
     }
   }
 }

@@ -165,6 +165,12 @@ size_t getSizeForTypeAArch64(uint64_t Type) {
   }
 }
 
+bool skipRelocationTypeX86(uint64_t Type) { return Type == ELF::R_X86_64_NONE; }
+
+bool skipRelocationTypeAArch64(uint64_t Type) {
+  return Type == ELF::R_AARCH64_NONE || Type == ELF::R_AARCH64_LD_PREL_LO19;
+}
+
 bool skipRelocationProcessX86(uint64_t Type, uint64_t Contents) {
   return false;
 }
@@ -536,6 +542,12 @@ size_t Relocation::getSizeForType(uint64_t Type) {
   return getSizeForTypeX86(Type);
 }
 
+bool Relocation::skipRelocationType(uint64_t Type) {
+  if (Arch == Triple::aarch64)
+    return skipRelocationTypeAArch64(Type);
+  return skipRelocationTypeX86(Type);
+}
+
 bool Relocation::skipRelocationProcess(uint64_t Type, uint64_t Contents) {
   if (Arch == Triple::aarch64)
     return skipRelocationProcessAArch64(Type, Contents);
@@ -562,7 +574,17 @@ bool Relocation::isGOT(uint64_t Type) {
   return isGOTX86(Type);
 }
 
-bool Relocation::isNone(uint64_t Type) { return Type == getNone(); }
+bool Relocation::isX86GOTPCRELX(uint64_t Type) {
+  if (Arch != Triple::x86_64)
+    return false;
+  return Type == ELF::R_X86_64_GOTPCRELX || Type == ELF::R_X86_64_REX_GOTPCRELX;
+}
+
+bool Relocation::isNone(uint64_t Type) {
+  if (Arch == Triple::aarch64)
+    return Type == ELF::R_AARCH64_NONE;
+  return Type == ELF::R_X86_64_NONE;
+}
 
 bool Relocation::isRelative(uint64_t Type) {
   if (Arch == Triple::aarch64)
@@ -582,10 +604,10 @@ bool Relocation::isTLS(uint64_t Type) {
   return isTLSX86(Type);
 }
 
-uint64_t Relocation::getNone() {
+bool Relocation::isPCRelative(uint64_t Type) {
   if (Arch == Triple::aarch64)
-    return ELF::R_AARCH64_NONE;
-  return ELF::R_X86_64_NONE;
+    return isPCRelativeAArch64(Type);
+  return isPCRelativeX86(Type);
 }
 
 uint64_t Relocation::getPC32() {
@@ -598,12 +620,6 @@ uint64_t Relocation::getPC64() {
   if (Arch == Triple::aarch64)
     return ELF::R_AARCH64_PREL64;
   return ELF::R_X86_64_PC64;
-}
-
-bool Relocation::isPCRelative(uint64_t Type) {
-  if (Arch == Triple::aarch64)
-    return isPCRelativeAArch64(Type);
-  return isPCRelativeX86(Type);
 }
 
 size_t Relocation::emit(MCStreamer *Streamer) const {

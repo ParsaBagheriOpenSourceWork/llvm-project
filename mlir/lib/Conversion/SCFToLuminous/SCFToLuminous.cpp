@@ -17,7 +17,7 @@
 #include "mlir/Dialect/Async/IR/Async.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/Luminous/IR/LuminousDialect.h"
-#include "mlir/Dialect/SCF/SCF.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BlockAndValueMapping.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/Transforms/DialectConversion.h"
@@ -41,10 +41,9 @@ struct LuminousDispatchParallelRewrite
 static LogicalResult applyPatterns(ModuleOp module) {
   ConversionTarget target(*module.getContext());
 
-  // parallel ops that still have launch attribute and
-  // parallel loops inside launch ops are illegal
+  // parallel ops that still have launch attribute
   target.addDynamicallyLegalOp<scf::ParallelOp>([](Operation *op) {
-    return !op->hasAttr(launchAttrName) && !op->getParentOfType<LaunchOp>();
+    return !op->hasAttr(launchAttrName);
   });
   target.addLegalDialect<LuminousDialect, LinalgDialect, AsyncDialect>();
   RewritePatternSet patterns(module.getContext());

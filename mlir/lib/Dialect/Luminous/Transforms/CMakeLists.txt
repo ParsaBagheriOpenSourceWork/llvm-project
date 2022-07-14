@@ -8,12 +8,12 @@ add_mlir_dialect_library(MLIRLuminousTransforms
     MLIRLuminousPassIncGen
 
     LINK_LIBS PUBLIC
-    MLIRAsync
+    MLIRAsyncDialect
     MLIRLuminous
     MLIRIR
-    MLIRMemRef
-    MLIRLinalg
-    MLIRSCF
+    MLIRMemRefDialect
+    MLIRLinalgDialect
+    MLIRSCFDialect
     MLIRPass
     MLIRTransforms
     MLIRTransformUtils

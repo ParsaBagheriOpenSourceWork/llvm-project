@@ -1291,7 +1291,8 @@ InstructionCost ARMTTIImpl::getShuffleCost(TTI::ShuffleKind Kind,
 
     if (!Mask.empty()) {
       std::pair<InstructionCost, MVT> LT = TLI->getTypeLegalizationCost(DL, Tp);
-      if (Mask.size() <= LT.second.getVectorNumElements() &&
+      if (LT.second.isVector() &&
+          Mask.size() <= LT.second.getVectorNumElements() &&
           (isVREVMask(Mask, LT.second, 16) || isVREVMask(Mask, LT.second, 32) ||
            isVREVMask(Mask, LT.second, 64)))
         return ST->getMVEVectorCostFactor(TTI::TCK_RecipThroughput) * LT.first;
@@ -2246,15 +2247,15 @@ bool ARMTTIImpl::preferPredicateOverEpilogue(Loop *L, LoopInfo *LI,
   return canTailPredicateLoop(L, LI, SE, DL, LAI);
 }
 
-bool ARMTTIImpl::emitGetActiveLaneMask() const {
+PredicationStyle ARMTTIImpl::emitGetActiveLaneMask() const {
   if (!ST->hasMVEIntegerOps() || !EnableTailPredication)
-    return false;
+    return PredicationStyle::None;
 
   // Intrinsic @llvm.get.active.lane.mask is supported.
   // It is used in the MVETailPredication pass, which requires the number of
   // elements processed by this vector loop to setup the tail-predicated
   // loop.
-  return true;
+  return PredicationStyle::Data;
 }
 void ARMTTIImpl::getUnrollingPreferences(Loop *L, ScalarEvolution &SE,
                                          TTI::UnrollingPreferences &UP,

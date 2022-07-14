@@ -81,6 +81,7 @@
 # define __bound NASTY_MACRO
 # define __deallocate NASTY_MACRO
 # define __deref NASTY_MACRO
+# define __format_string NASTY_MACRO
 # define __full NASTY_MACRO
 # define __in NASTY_MACRO
 # define __inout NASTY_MACRO
@@ -134,6 +135,10 @@
 #define X NASTY_MACRO
 #define Xp NASTY_MACRO
 #define Xs NASTY_MACRO
+
+// The classic Windows min/max macros
+#define min NASTY_MACRO
+#define max NASTY_MACRO
 
 /*
 BEGIN-SCRIPT

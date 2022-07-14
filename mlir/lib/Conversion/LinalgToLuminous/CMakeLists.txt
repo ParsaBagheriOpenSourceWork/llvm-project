@@ -11,11 +11,11 @@ add_mlir_conversion_library(MLIRLinalgToLuminous
     Core
 
     LINK_LIBS PUBLIC
-    MLIRArithmetic
-    MLIRControlFlow
+    MLIRArithmeticDialect
+    MLIRControlFlowDialect
     MLIRLuminous
-    MLIRLinalg
-    MLIRAsync
-    MLIRSCF
+    MLIRLinalgDialect
+    MLIRAsyncDialect
+    MLIRSCFDialect
     MLIRTransforms
     )

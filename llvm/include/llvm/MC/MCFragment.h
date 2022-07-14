@@ -33,6 +33,7 @@ class MCFragment : public ilist_node_with_parent<MCFragment, MCSection> {
 public:
   enum FragmentType : uint8_t {
     FT_Align,
+    FT_NeverAlign,
     FT_Data,
     FT_CompactEncodedInst,
     FT_Fill,
@@ -293,7 +294,7 @@ public:
 
 class MCAlignFragment : public MCFragment {
   /// The alignment to ensure, in bytes.
-  unsigned Alignment;
+  Align Alignment;
 
   /// Flag to indicate that (optimal) NOPs should be emitted instead
   /// of using the provided value. The exact interpretation of this flag is
@@ -314,12 +315,12 @@ class MCAlignFragment : public MCFragment {
   const MCSubtargetInfo *STI;
 
 public:
-  MCAlignFragment(unsigned Alignment, int64_t Value, unsigned ValueSize,
+  MCAlignFragment(Align Alignment, int64_t Value, unsigned ValueSize,
                   unsigned MaxBytesToEmit, MCSection *Sec = nullptr)
       : MCFragment(FT_Align, false, Sec), Alignment(Alignment), EmitNops(false),
         Value(Value), ValueSize(ValueSize), MaxBytesToEmit(MaxBytesToEmit) {}
 
-  unsigned getAlignment() const { return Alignment; }
+  Align getAlignment() const { return Alignment; }
 
   int64_t getValue() const { return Value; }
 
@@ -337,6 +338,27 @@ public:
 
   static bool classof(const MCFragment *F) {
     return F->getKind() == MCFragment::FT_Align;
+  }
+};
+
+class MCNeverAlignFragment : public MCFragment {
+  /// The alignment the end of the next fragment should avoid.
+  unsigned Alignment;
+
+  /// When emitting Nops some subtargets have specific nop encodings.
+  const MCSubtargetInfo &STI;
+
+public:
+  MCNeverAlignFragment(unsigned Alignment, const MCSubtargetInfo &STI,
+                       MCSection *Sec = nullptr)
+      : MCFragment(FT_NeverAlign, false, Sec), Alignment(Alignment), STI(STI) {}
+
+  unsigned getAlignment() const { return Alignment; }
+
+  const MCSubtargetInfo &getSubtargetInfo() const { return STI; }
+
+  static bool classof(const MCFragment *F) {
+    return F->getKind() == MCFragment::FT_NeverAlign;
   }
 };
 

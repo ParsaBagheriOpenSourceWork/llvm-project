@@ -1,13 +1,16 @@
-/* RUN: %clang_cc1 -std=c89 -verify=expected,c89only -pedantic -Wno-declaration-after-statement -Wno-c11-extensions %s
-   RUN: %clang_cc1 -std=c89 -verify=expected,c89only -pedantic -Wno-declaration-after-statement -Wno-c11-extensions -fno-signed-char %s
-   RUN: %clang_cc1 -std=c99 -verify=expected,c99untilc2x -pedantic -Wno-c11-extensions %s
-   RUN: %clang_cc1 -std=c11 -verify=expected,c99untilc2x -pedantic %s
-   RUN: %clang_cc1 -std=c17 -verify=expected,c99untilc2x -pedantic %s
-   RUN: %clang_cc1 -std=c2x -verify=expected,c2xandup -pedantic %s
+/* RUN: %clang_cc1 -std=c89 -fsyntax-only -verify=expected,c89only -pedantic -Wno-declaration-after-statement -Wno-c11-extensions %s
+   RUN: %clang_cc1 -std=c89 -fsyntax-only -verify=expected,c89only -pedantic -Wno-declaration-after-statement -Wno-c11-extensions -fno-signed-char %s
+   RUN: %clang_cc1 -std=c99 -fsyntax-only -verify=expected,c99untilc2x -pedantic -Wno-c11-extensions %s
+   RUN: %clang_cc1 -std=c11 -fsyntax-only -verify=expected,c99untilc2x -pedantic %s
+   RUN: %clang_cc1 -std=c17 -fsyntax-only -verify=expected,c99untilc2x -pedantic %s
+   RUN: %clang_cc1 -std=c2x -fsyntax-only -verify=expected,c2xandup -pedantic %s
  */
 
 /* The following are DRs which do not require tests to demonstrate
  * conformance or nonconformance.
+ *
+ * WG14 DR001: yes
+ * Do functions return values by copying?
  *
  * WG14 DR005: yes
  * May a conforming implementation define and recognize a pragma which would
@@ -200,7 +203,7 @@ _Static_assert(THIS$AND$THAT(1, 1) == 2, "fail"); /* expected-warning 2 {{'$' in
  * Note: the rule changed in C99 to be different than the resolution to DR029,
  * so it's not clear there's value in implementing this DR.
  */
-_Static_assert(__builtin_types_compatible_p(struct S { int a; }, union U { int a; }), "fail"); /* expected-error {{static_assert failed due to requirement '__builtin_types_compatible_p(struct S, union U)' "fail"}} */
+_Static_assert(__builtin_types_compatible_p(struct S { int a; }, union U { int a; }), "fail"); /* expected-error {{static_assert failed due to requirement '__builtin_types_compatible_p(struct S, union U)': fail}} */
 
 /* WG14 DR031: yes
  * Can constant expressions overflow?
@@ -231,13 +234,13 @@ int dr032 = (1, 2); /* expected-warning {{left operand of comma operator has no 
 /* WG14 DR035: partial
  * Questions about definition of functions without a prototype
  */
-void dr035_1(a, b) /* expected-warning {{a function declaration without a prototype is deprecated in all versions of C and is not supported in C2x}} */
+void dr035_1(a, b) /* expected-warning {{a function definition without a prototype is deprecated in all versions of C and is not supported in C2x}} */
   int a(enum b {x, y}); /* expected-warning {{declaration of 'enum b' will not be visible outside of this function}} */
   int b; {
   int test = x; /* expected-error {{use of undeclared identifier 'x'}} */
 }
 
-void dr035_2(c) /* expected-warning {{a function declaration without a prototype is deprecated in all versions of C and is not supported in C2x}} */
+void dr035_2(c) /* expected-warning {{a function definition without a prototype is deprecated in all versions of C and is not supported in C2x}} */
   enum m{q, r} c; { /* expected-warning {{declaration of 'enum m' will not be visible outside of this function}} */
   /* FIXME: This should be accepted because the scope of m, q, and r ends at
    * the closing brace of the function per C89 6.1.2.1.
@@ -391,7 +394,7 @@ void dr068(void) {
  * a prototype causes implicit conversions rather than relying on default
  * argument promotion and warm thoughts.
  */
-void dr070_1(c) /* expected-warning {{a function declaration without a prototype is deprecated in all versions of C and is not supported in C2x}} */
+void dr070_1(c) /* expected-warning {{a function definition without a prototype is deprecated in all versions of C and is not supported in C2x}} */
   int c; {
 }
 
