@@ -37,13 +37,14 @@ createArgStruct(PatternRewriter &rewriter, Operands &&operands,
       auto operandAdaptor = std::get<1>(operand_tuple);
       MemRefDescriptor::unpack(
           rewriter, operand.getLoc(), operandAdaptor,
-          operand.getType().template dyn_cast<MemRefType>(), memrefValues);
+          operand.getType().template cast<MemRefType>(), memrefValues);
       for (auto m : memrefValues) {
         paramTypes.push_back(m.getType());
         actuals.push_back(m);
       }
     } else {
       auto llvmType = typeConverter->convertType(operand.getType());
+      assert(llvmType);
       paramTypes.push_back(llvmType);
       actuals.push_back(operand);
     }
@@ -101,7 +102,11 @@ LogicalResult LuminousDispatchToLLVM::matchAndRewrite(
 
   auto structPtr =
       packArgsStruct(rewriter, loc, paramStruct, paramTypes, actuals);
-
+  DataLayout dl(module);
+  auto sizeOfStruct = dl.getTypeSizeInBits(paramStruct);
+  auto llvmInt32Type = IntegerType::get(rewriter.getContext(), 32);
+  auto size = rewriter.create<LLVM::ConstantOp>(loc, llvmInt32Type,
+                                                rewriter.getI32IntegerAttr(sizeOfStruct));
   /// TODO : temporary here ---------------
   auto ptrType = LLVM::LLVMPointerType::get(IntegerType::get(getContext(), 8));
   auto wrapperName = std::string(op.getFuncName().getValue()) + "_wrapper";
@@ -113,13 +118,13 @@ LogicalResult LuminousDispatchToLLVM::matchAndRewrite(
   ///--------------------------------------
 
   auto runtime_fn = LLVM::lookupOrCreateFn(module, LuminousRuntimeDispatchFn,
-                                           {ptrType, ptrType}, ptrType);
+                                           {ptrType, ptrType, llvmInt32Type}, ptrType);
 
   auto paramsPtr = rewriter.create<LLVM::BitcastOp>(op.getLoc(), ptrType,
                                                     ValueRange(structPtr));
   rewriter.create<LLVM::CallOp>(
       op.getLoc(), runtime_fn,
-      ValueRange({fnPtrToVoidPtr.getRes(), paramsPtr.getRes()}));
+      ValueRange({fnPtrToVoidPtr.getRes(), paramsPtr.getRes(), size.getRes()}));
 
   /// TODO : temporary here ---------------
 

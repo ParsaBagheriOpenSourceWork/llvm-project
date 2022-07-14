@@ -35,18 +35,19 @@ struct ReplaceFuncWithDecl : public OpRewritePattern<ModuleOp> {
   using OpRewritePattern<ModuleOp>::OpRewritePattern;
   LogicalResult matchAndRewrite(ModuleOp op,
                                 PatternRewriter &rewriter) const override {
-    auto parentModule = op->getParentOfType<ModuleOp>();
-    OpBuilder::InsertionGuard g(rewriter);
-    rewriter.setInsertionPoint(op);
-    for (auto &bodyOp : *op.getBody()) {
-      if (auto fnOp = dyn_cast<LLVM::LLVMFuncOp>(bodyOp)) {
-        auto funcOp = rewriter.create<LLVM::LLVMFuncOp>(
-            fnOp->getLoc(), fnOp.getName(), fnOp.getFunctionType());
-        funcOp->setAttr("llvm.emit_c_interface",
-                        UnitAttr::get(op->getContext()));
-        funcOp.setPrivate();
-      }
-    }
+
+//    auto parentModule = op->getParentOfType<ModuleOp>();
+//    OpBuilder::InsertionGuard g(rewriter);
+//    rewriter.setInsertionPoint(op);
+//    for (auto &bodyOp : *op.getBody()) {
+//      if (auto fnOp = dyn_cast<LLVM::LLVMFuncOp>(bodyOp)) {
+//        auto funcOp = rewriter.create<LLVM::LLVMFuncOp>(
+//            fnOp->getLoc(), fnOp.getName(), fnOp.getFunctionType());
+//        funcOp->setAttr("llvm.emit_c_interface",
+//                        UnitAttr::get(op->getContext()));
+//        funcOp.setPrivate();
+//      }
+//    }
     rewriter.eraseOp(op);
     return success();
   }
