@@ -154,7 +154,7 @@ static LogicalResult lmnsMlirOptMain(int argc, char **argv,
   llvm::raw_fd_ostream tmpOut(tmpFileFD, true);
   auto moduleOp = module->get();
   for (auto &op : *moduleOp.getBody()) {
-    if (isa<ModuleOp>(op)) {
+    if (isa<ModuleOp>(op) && op.hasAttr("luminous.module")) {
       op.print(tmpOut);
     }
   }

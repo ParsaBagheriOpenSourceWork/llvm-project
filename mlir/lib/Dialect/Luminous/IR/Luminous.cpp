@@ -6,8 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Luminous/IR/LuminousDialect.h"
-
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/DialectImplementation.h"
@@ -47,50 +47,44 @@ LogicalResult LuminousDialect::verifyOperationAttribute(Operation *op,
            << ModuleOp::getOperationName() << '\'';
 
   auto walkResult = module.walk([&module](DispatchOp dispatchOp) -> WalkResult {
-    // Ignore launches that are nested more or less deep than functions in the
-    // module we are currently checking.
-    if (!dispatchOp->getParentOp() ||
-        dispatchOp->getParentOp()->getParentOp() != module)
-      return success();
-
-    // Ignore launch ops with missing attributes here. The errors will be
-    // reported by the verifiers of those ops.
-    if (!dispatchOp->getAttrOfType<SymbolRefAttr>(
-            DispatchOp::getFuncAttrName()))
-      return success();
-
     // Check that `dispatch` refers to a well-formed kernel module.
     StringAttr luminousModuleName = dispatchOp.getFuncModuleName();
-    auto luminousModule =
-        module.lookupSymbol<LuminousModuleOp>(luminousModuleName);
-    if (!luminousModule)
+    auto luminousModule = module.lookupSymbol(luminousModuleName);
+
+    if (!luminousModule || (!isa<LuminousModuleOp>(luminousModule) &&
+                            !(isa<ModuleOp>(luminousModule) &&
+                              luminousModule->hasAttr(getLuminousModuleAttrName()))))
       return dispatchOp.emitOpError()
              << "kernel module '" << luminousModuleName.getValue()
              << "' is undefined";
 
     // Check that `dispatch` refers to a well-formed kernel function.
     Operation *kernelFunc = module.lookupSymbol(dispatchOp.functionAttr());
-    auto kernelFunction =
-        dyn_cast_or_null<luminous::LuminousFuncOp>(kernelFunc);
-    if (!kernelFunction)
+    if (!kernelFunc && !isa<luminous::LuminousFuncOp>(kernelFunc) &&
+        !kernelFunc->hasAttr(getLuminousFuncAttrName()))
       return dispatchOp.emitOpError("kernel function '")
              << dispatchOp.function() << "' is undefined";
 
-    unsigned actualNumArguments = dispatchOp.getNumFuncOperands();
-    unsigned expectedNumArguments = kernelFunction.getNumArguments();
-    if (expectedNumArguments != actualNumArguments)
-      return dispatchOp.emitOpError("got ")
-             << actualNumArguments << " kernel operands but expected "
-             << expectedNumArguments;
+    if (auto kernelFunction = dyn_cast<luminous::LuminousFuncOp>(kernelFunc)) {
+      unsigned actualNumArguments = dispatchOp.getNumFuncOperands();
+      unsigned expectedNumArguments = kernelFunction.getNumArguments();
+      if (expectedNumArguments != actualNumArguments)
+        return dispatchOp.emitOpError("got ")
+               << actualNumArguments << " kernel operands but expected "
+               << expectedNumArguments;
 
-    auto functionType = kernelFunction.getFunctionType();
-    for (unsigned i = 0; i < expectedNumArguments; ++i) {
-      if (dispatchOp.getFuncOperand(i).getType() != functionType.getInput(i)) {
-        return dispatchOp.emitOpError("type of function argument ")
-               << i << " does not match";
+      auto functionType = kernelFunction.getFunctionType();
+      for (unsigned i = 0; i < expectedNumArguments; ++i) {
+        if (dispatchOp.getFuncOperand(i).getType() !=
+            functionType.getInput(i)) {
+          return dispatchOp.emitOpError("type of function argument ")
+                 << i << " does not match";
+        }
       }
     }
-
+    // TODO: we have to cover else case, dispatch op could refer to func::funcOp
+    // or llvm::funcOp, but it's subject to change that's why I haven't checked
+    // it here
     return success();
   });
 
@@ -109,7 +103,7 @@ void LuminousModuleOp::build(OpBuilder &builder, OperationState &result,
 }
 
 ParseResult LuminousModuleOp::parse(OpAsmParser &parser,
-                                         OperationState &result) {
+                                    OperationState &result) {
   StringAttr nameAttr;
   if (parser.parseSymbolName(nameAttr, ::SymbolTable::getSymbolAttrName(),
                              result.attributes))
@@ -167,8 +161,8 @@ ParseResult LuminousFuncOp::parse(OpAsmParser &parser, OperationState &result) {
 
   auto signatureLocation = parser.getCurrentLocation();
   if (failed(function_interface_impl::parseFunctionSignature(
-          parser, /*allowVariadic=*/false, args,
-          isVariadic, resultTypes, resultAttrs)))
+          parser, /*allowVariadic=*/false, args, isVariadic, resultTypes,
+          resultAttrs)))
     return failure();
 
   if (args.empty())
@@ -328,10 +322,10 @@ static void printAsyncDependencies(OpAsmPrinter &printer, Operation *op,
   printer << "]";
 }
 
-static ParseResult
-parseDispatchOpOperands(OpAsmParser &parser,
-                        SmallVectorImpl<OpAsmParser::UnresolvedOperand> &argNames,
-                        SmallVectorImpl<Type> &argTypes) {
+static ParseResult parseDispatchOpOperands(
+    OpAsmParser &parser,
+    SmallVectorImpl<OpAsmParser::UnresolvedOperand> &argNames,
+    SmallVectorImpl<Type> &argTypes) {
   SmallVector<OpAsmParser::Argument> args;
   if (parser.parseArgumentList(args, OpAsmParser::Delimiter::Paren,
                                /*allowType=*/true))

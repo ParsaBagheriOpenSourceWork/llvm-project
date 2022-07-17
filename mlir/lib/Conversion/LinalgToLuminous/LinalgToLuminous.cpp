@@ -36,9 +36,9 @@ struct LuminousLaunchLinalgRewrite
 
     // Only perform this conversion on attributed linalg ops that are not in a
     // launch capsule
-    if (!linalgOp->hasAttr(luminous::maxMemoryAttrName) ||
+    if (!linalgOp->hasAttr(LuminousDialect::getLuminousMemoryFootprintAttrName()) ||
         isa<LaunchOp>(linalgOp->getParentOp()) ||
-        linalgOp->getParentOp()->hasAttr(luminous::launchAttrName))
+        linalgOp->getParentOp()->hasAttr(LuminousDialect::getLuminousLaunchAttrName()))
       return failure();
 
     OpBuilder::InsertionGuard guard(rewriter);
@@ -79,9 +79,9 @@ static LogicalResult applyPatterns(ModuleOp module) {
 #define GET_OP_LIST
 #include "mlir/Dialect/Linalg/IR/LinalgStructuredOps.cpp.inc"
       >([&](Operation *op) {
-    return !op->hasAttr(luminous::maxMemoryAttrName) ||
+    return !op->hasAttr(LuminousDialect::getLuminousMemoryFootprintAttrName()) ||
            isa<LaunchOp>(op->getParentOp()) ||
-           op->getParentOp()->hasAttr(luminous::launchAttrName);
+           op->getParentOp()->hasAttr(LuminousDialect::getLuminousLaunchAttrName());
   });
   target.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
   RewritePatternSet patterns(module.getContext());

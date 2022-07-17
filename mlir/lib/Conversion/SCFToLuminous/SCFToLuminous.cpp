@@ -43,7 +43,7 @@ static LogicalResult applyPatterns(ModuleOp module) {
 
   // parallel ops that still have launch attribute
   target.addDynamicallyLegalOp<scf::ParallelOp>([](Operation *op) {
-    return !op->hasAttr(launchAttrName);
+    return !op->hasAttr(LuminousDialect::getLuminousLaunchAttrName());
   });
   target.addLegalDialect<LuminousDialect, LinalgDialect, AsyncDialect>();
   RewritePatternSet patterns(module.getContext());
@@ -67,7 +67,7 @@ LogicalResult LuminousDispatchParallelRewrite::matchAndRewrite(
     scf::ParallelOp op, PatternRewriter &rewriter) const {
 
   // Only perform this conversion on attributed parallel ops
-  if (!op->hasAttr(launchAttrName))
+  if (!op->hasAttr(LuminousDialect::getLuminousLaunchAttrName()))
     return failure();
 
   if (op.getNumReductions() != 0)

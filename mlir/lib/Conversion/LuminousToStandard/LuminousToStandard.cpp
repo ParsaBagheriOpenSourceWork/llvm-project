@@ -2,7 +2,6 @@
 // Created by parsab on 6/27/22.
 //
 
-
 #include "mlir/Conversion/LuminousToStandard/LuminousToStandard.h"
 #include "../PassDetail.h"
 #include "mlir/Dialect/Async/IR/Async.h"
@@ -41,7 +40,8 @@ LuminousFuncToFunc::matchAndRewrite(LuminousFuncOp op,
   }
   rewriter.inlineRegionBefore(op.getBody(), funcOp.getBody(),
                               funcOp.getBody().begin());
-  funcOp->setAttr("luminous.func", rewriter.getUnitAttr());
+  funcOp->setAttr(LuminousDialect::getLuminousFuncAttrName(),
+                  rewriter.getUnitAttr());
   //  op->getParentOfType<ModuleOp>().dump();
   return success();
 }
@@ -64,7 +64,8 @@ LuminousModuleToStandard::matchAndRewrite(LuminousModuleOp op,
       rewriter.clone(bodyOp);
     }
   }
-  moduleOp->setAttr("luminous.module", rewriter.getUnitAttr());
+  moduleOp->setAttr(LuminousDialect::getLuminousModuleAttrName(),
+                    rewriter.getUnitAttr());
   return success();
 }
 
