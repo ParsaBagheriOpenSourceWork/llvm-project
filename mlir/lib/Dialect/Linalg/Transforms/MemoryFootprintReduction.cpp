@@ -41,7 +41,7 @@ struct AttrPropagatingSingleIterationLoopCanonicalizer
 
     // Parsa: Only perform this canonicalization on loops with specified
     // attribute
-    if (!op->hasAttr(LuminousDialect::getLuminousLaunchAttrName()))
+    if (!op->hasAttr(LuminousDialect::getLaunchAttrName()))
       return success();
 
     BlockAndValueMapping mapping;
@@ -88,7 +88,7 @@ struct AttrPropagatingSingleIterationLoopCanonicalizer
         rewriter.create<ParallelOp>(op.getLoc(), newLowerBounds, newUpperBounds,
                                     newSteps, op.getInitVals(), nullptr);
     // Parsa: Propagate our attribute
-    auto launchAttrName = LuminousDialect::getLuminousLaunchAttrName();
+    auto launchAttrName = LuminousDialect::getLaunchAttrName();
     newOp->setAttr(launchAttrName, op->getAttr(launchAttrName));
     // Clone the loop body and remap the block arguments of the collapsed loops
     // (inlining does not support a cancellable block argument mapping).
@@ -124,9 +124,9 @@ struct MemReductionLinalgTilingPattern : public LinalgTilingPattern {
     auto &tiledLinalgOp = result.getValue();
 
     for (auto *loop : tiledLinalgOp.loops)
-      loop->setAttr(LuminousDialect::getLuminousLaunchAttrName(), rewriter.getUnitAttr());
+      loop->setAttr(LuminousDialect::getLaunchAttrName(), rewriter.getUnitAttr());
 
-    tiledLinalgOp.op->setAttr(LuminousDialect::getLuminousMemoryFootprintAttrName(),
+    tiledLinalgOp.op->setAttr(LuminousDialect::getMemoryFootprintAttrName(),
                               rewriter.getI64IntegerAttr(maxMemFootprint));
 
     return success();

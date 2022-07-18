@@ -700,7 +700,19 @@ def ConvertParallelLoopToLuminousLaunch :
 
 def ConvertLuminousToStandard :
     Pass<"convert-luminous-to-std", "ModuleOp"> {
-  let summary = "Convert luminous module ops to module ops";
+  let summary = "Convert luminous.module and luminous.func to module "
+                "and func.func";
+  let description = [{
+    before:
+        luminous.module @m {
+          luminous.func @f(...) {
+            ...
+
+    after:
+        module @m attributes {luminous.module} {
+          func.func @f (...) attributes {luminous.func} {
+            ...
+  }];
   let constructor = "mlir::createConvertLuminousToStandardPass()";
   let dependentDialects = ["luminous::LuminousDialect",
                            "func::FuncDialect",
@@ -713,8 +725,47 @@ def ConvertLuminousToStandard :
 
 def ConvertLuminousToLLVM :
     Pass<"convert-luminous-to-llvm", "ModuleOp"> {
-  let summary = "Convert luminous dispatch ops to llvm.call ops and lowers their "
-                "callees to llvm";
+  let summary = "Convert luminous dispatch ops to llvm.call ops and creates a "
+                "wrapper for its callees in the callees module";
+  let description = [{
+    before:
+      module @m attributes {luminous.module} {
+        llvm.func @f(...) attributes{luminous.func} { ... }
+      }
+      func.func @main(...) {
+        ...
+        luminous.dispatch @m::@f(...)
+        ...
+      }
+
+    after:
+      llvm.func @__luminous_runtime_dispatch(!llvm.ptr<i8>, !llvm.ptr<i8>, i32)
+      llvm.func @__luminous_runtime_load_capsule(!llvm.ptr<i8>) -> !llvm.ptr<i8>
+      llvm.mlir.global internal constant @f_wrapper("f_wrapper\00")
+      module @m attributes {luminous.module} {
+        llvm.func @f(...) attributes{luminous.func} { ... }
+        llvm.func @f_wrapper(%arg0: !llvm.ptr<i8>) {
+          %0 = llvm.bitcast %arg0 : !llvm.ptr<i8> to !llvm.ptr<struct<packed(/*f args*/)>>
+          // unpacks arguments
+          ...
+          llvm.call f(/*unpacked arguments*/)
+        }
+      }
+      func.func @main(...) {
+        ...
+        %struct_ptr = llvm.alloca 1 x !llvm.struct<packed(/*f args*/)> : (i32) -> !llvm.ptr<struct<packed(/*f args*/)>>
+        %struct_size_bits  = llvm.mlir.constant(/*size*/: i32): i32
+        // packs arguments into %struct
+        ...
+        // takes a pointer to the beginning of global string
+        %global_str = llvm.mlir.addressof @f_wrapper : !llvm.ptr<array<19 x i8>>
+        %ptr = llvm.getelementptr %global_str[0, 0] : (!llvm.ptr<array<19 x i8>>, i32, i32) -> !llvm.ptr<i8>
+        %fn = llvm.call @__luminous_runtime_load_capsule(%ptr) : (!llvm.ptr<i8>) -> !llvm.ptr<i8>
+        %args_opaque = llvm.bitcast %struct_ptr : !llvm.ptr<struct<packed(/*f args*/)>> to !llvm.ptr<i8>
+        llvm.call @__luminous_runtime_dispatch(%fn, %args_opaque, %struct_size_bits) : (!llvm.ptr<i8>, !llvm.ptr<i8>, i32) -> ()
+        ...
+      }
+  }];
   let constructor = "mlir::createConvertLuminousToLLVMPass()";
   let dependentDialects = ["luminous::LuminousDialect",
                            "func::FuncDialect",

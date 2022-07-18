@@ -32,19 +32,19 @@ def Luminous_Dialect : Dialect {
       return "luminous.container_module";
     }
 
-    static StringRef getLuminousFuncAttrName() {
+    static StringRef getFuncAttrName() {
       return "luminous.func";
     }
 
-    static StringRef getLuminousModuleAttrName() {
+    static StringRef getModuleAttrName() {
       return "luminous.module";
     }
 
-    static StringRef getLuminousMemoryFootprintAttrName() {
+    static StringRef getMemoryFootprintAttrName() {
       return "luminous.memory-footprint";
     }
 
-    static StringRef getLuminousLaunchAttrName() {
+    static StringRef getLaunchAttrName() {
       return "luminous.launch";
     }
 

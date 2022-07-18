@@ -1,6 +1,11 @@
+//===- LuminousToStandard.cpp ---------------------------------------------===//
 //
-// Created by parsab on 6/27/22.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+//===----------------------------------------------------------------------===//
+
 
 #include "mlir/Conversion/LuminousToStandard/LuminousToStandard.h"
 #include "../PassDetail.h"
@@ -40,9 +45,8 @@ LuminousFuncToFunc::matchAndRewrite(LuminousFuncOp op,
   }
   rewriter.inlineRegionBefore(op.getBody(), funcOp.getBody(),
                               funcOp.getBody().begin());
-  funcOp->setAttr(LuminousDialect::getLuminousFuncAttrName(),
+  funcOp->setAttr(LuminousDialect::getFuncAttrName(),
                   rewriter.getUnitAttr());
-  //  op->getParentOfType<ModuleOp>().dump();
   return success();
 }
 
@@ -64,7 +68,7 @@ LuminousModuleToStandard::matchAndRewrite(LuminousModuleOp op,
       rewriter.clone(bodyOp);
     }
   }
-  moduleOp->setAttr(LuminousDialect::getLuminousModuleAttrName(),
+  moduleOp->setAttr(LuminousDialect::getModuleAttrName(),
                     rewriter.getUnitAttr());
   return success();
 }

@@ -53,7 +53,7 @@ LogicalResult LuminousDialect::verifyOperationAttribute(Operation *op,
 
     if (!luminousModule || (!isa<LuminousModuleOp>(luminousModule) &&
                             !(isa<ModuleOp>(luminousModule) &&
-                              luminousModule->hasAttr(getLuminousModuleAttrName()))))
+                              luminousModule->hasAttr(LuminousDialect::getModuleAttrName()))))
       return dispatchOp.emitOpError()
              << "kernel module '" << luminousModuleName.getValue()
              << "' is undefined";
@@ -61,7 +61,7 @@ LogicalResult LuminousDialect::verifyOperationAttribute(Operation *op,
     // Check that `dispatch` refers to a well-formed kernel function.
     Operation *kernelFunc = module.lookupSymbol(dispatchOp.functionAttr());
     if (!kernelFunc && !isa<luminous::LuminousFuncOp>(kernelFunc) &&
-        !kernelFunc->hasAttr(getLuminousFuncAttrName()))
+        !kernelFunc->hasAttr(LuminousDialect::getFuncAttrName()))
       return dispatchOp.emitOpError("kernel function '")
              << dispatchOp.function() << "' is undefined";
 

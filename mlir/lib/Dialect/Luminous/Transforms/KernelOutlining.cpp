@@ -287,12 +287,12 @@ void defaultDispatchBuilderFn(Operation *launchOp,
     for (auto &op : body) {
       // add a new block to the dispatch blocks and fill it with ops for every
       // op that has 'luminous::maxMemoryAttrName' attribute
-      if (op.hasAttr(LuminousDialect::getLuminousMemoryFootprintAttrName())) {
+      if (op.hasAttr(LuminousDialect::getMemoryFootprintAttrName())) {
         // making sure parent op hasn't already been dispatched, nested
         // dispatches are not allowed
         Operation *p = op.getParentOp();
-        while (!isa<LaunchOp>(p) && !p->hasAttr(LuminousDialect::getLuminousLaunchAttrName())) {
-          assert(!p->hasAttr(LuminousDialect::getLuminousMemoryFootprintAttrName()) &&
+        while (!isa<LaunchOp>(p) && !p->hasAttr(LuminousDialect::getLaunchAttrName())) {
+          assert(!p->hasAttr(LuminousDialect::getMemoryFootprintAttrName()) &&
                  "attempting a nested dispatch!");
           p = p->getParentOp();
         }
@@ -357,7 +357,7 @@ template <typename LuminousLaunchT>
 LogicalResult KernelOutliningRewritePattern<LuminousLaunchT>::matchAndRewrite(
     LuminousLaunchT op, PatternRewriter &rewriter) const {
 
-  if (isa<scf::ParallelOp>(op) && !op->hasAttr(LuminousDialect::getLuminousLaunchAttrName()))
+  if (isa<scf::ParallelOp>(op) && !op->hasAttr(LuminousDialect::getLaunchAttrName()))
     return failure();
 
   // stop if already visited
