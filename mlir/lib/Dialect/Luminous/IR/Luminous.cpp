@@ -55,14 +55,14 @@ LogicalResult LuminousDialect::verifyOperationAttribute(Operation *op,
                             !(isa<ModuleOp>(luminousModule) &&
                               luminousModule->hasAttr(LuminousDialect::getModuleAttrName()))))
       return dispatchOp.emitOpError()
-             << "kernel module '" << luminousModuleName.getValue()
+             << "luminous.module '" << luminousModuleName.getValue()
              << "' is undefined";
 
     // Check that `dispatch` refers to a well-formed kernel function.
     Operation *kernelFunc = module.lookupSymbol(dispatchOp.functionAttr());
-    if (!kernelFunc && !isa<luminous::LuminousFuncOp>(kernelFunc) &&
-        !kernelFunc->hasAttr(LuminousDialect::getFuncAttrName()))
-      return dispatchOp.emitOpError("kernel function '")
+    if (!kernelFunc || (!isa<luminous::LuminousFuncOp>(kernelFunc) &&
+        !kernelFunc->hasAttr(LuminousDialect::getFuncAttrName())))
+      return dispatchOp.emitOpError("capsule function '")
              << dispatchOp.function() << "' is undefined";
 
     if (auto kernelFunction = dyn_cast<luminous::LuminousFuncOp>(kernelFunc)) {
@@ -70,7 +70,7 @@ LogicalResult LuminousDialect::verifyOperationAttribute(Operation *op,
       unsigned expectedNumArguments = kernelFunction.getNumArguments();
       if (expectedNumArguments != actualNumArguments)
         return dispatchOp.emitOpError("got ")
-               << actualNumArguments << " kernel operands but expected "
+               << actualNumArguments << " capsule function operands but expected "
                << expectedNumArguments;
 
       auto functionType = kernelFunction.getFunctionType();
@@ -168,8 +168,14 @@ ParseResult LuminousFuncOp::parse(OpAsmParser &parser, OperationState &result) {
   if (args.empty())
     return parser.emitError(signatureLocation) << "requires named arguments";
 
+  // Checking if we have named arguments
+  for (auto &arg: args) {
+    if (arg.ssaName.name.empty())
+      return parser.emitError(signatureLocation) << "requires named arguments";
+  }
+
   if (!resultAttrs.empty() || !resultTypes.empty())
-    return parser.emitError(signatureLocation) << "does not expect return type";
+    return parser.emitError(signatureLocation) << "expected no return type";
 
   // Construct the function type. More types will be added to the region, but
   // not to the function type.
@@ -221,8 +227,9 @@ LogicalResult LuminousFuncOp::verifyType() {
 LogicalResult LuminousFuncOp::verifyBody() {
   unsigned numFuncArguments = getNumArguments();
   unsigned numBlockArguments = front().getNumArguments();
-  if (numBlockArguments < numFuncArguments)
-    return emitOpError() << "expected at least " << numFuncArguments
+
+  if (numBlockArguments != numFuncArguments)
+    return emitOpError() << "expected " << numFuncArguments
                          << " arguments to body region";
 
   ArrayRef<Type> funcArgTypes = getFunctionType().getInputs();
@@ -306,7 +313,7 @@ static ParseResult parseAsyncDependencies(
     SmallVectorImpl<OpAsmParser::UnresolvedOperand> &asyncDependencies) {
   auto loc = parser.getCurrentLocation();
   if (parser.getNumResults() == 0)
-    return parser.emitError(loc, "needs to be named");
+    return parser.emitError(loc, "must have a result");
   asyncTokenType = parser.getBuilder().getType<TokenType>();
   return parser.parseOperandList(asyncDependencies,
                                  OpAsmParser::Delimiter::OptionalSquare);
@@ -380,10 +387,14 @@ ParseResult LaunchOp::parse(OpAsmParser &parser, OperationState &result) {
 
   SmallVector<OpAsmParser::UnresolvedOperand, 4> step;
   if (parser.parseKeyword("step") ||
-      parser.parseOperandList(step, shape.size(),
+      parser.parseOperandList(step, /*requiredOperandCount=*/-1,
                               OpAsmParser::Delimiter::Paren) ||
       parser.resolveOperands(step, builder.getIndexType(), result.operands))
     return failure();
+
+  if (step.size() != shape.size()) {
+    return parser.emitError(parser.getCurrentLocation(), "op shape and step variables must be the same size.");
+  }
 
   // Now parse the body.
   std::unique_ptr<Region> region = std::make_unique<Region>();
