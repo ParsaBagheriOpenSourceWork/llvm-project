@@ -8,6 +8,7 @@
 
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Luminous/IR/LuminousDialect.h"
+
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/DialectImplementation.h"
@@ -46,47 +47,53 @@ LogicalResult LuminousDialect::verifyOperationAttribute(Operation *op,
            << getContainerModuleAttrName() << "' attribute to be attached to '"
            << ModuleOp::getOperationName() << '\'';
 
-  auto walkResult = module.walk([&module](DispatchOp dispatchOp) -> WalkResult {
-    // Check that `dispatch` refers to a well-formed kernel module.
-    StringAttr luminousModuleName = dispatchOp.getFuncModuleName();
-    auto luminousModule = module.lookupSymbol(luminousModuleName);
+  const auto walkResult =
+      module.walk([&module](DispatchOp dispatchOp) -> WalkResult {
+        // Check that `dispatch` refers to a well-formed luminous module.
+        const StringAttr luminousModuleName = dispatchOp.getFuncModuleName();
+        const auto luminousModule = module.lookupSymbol(luminousModuleName);
 
-    if (!luminousModule || (!isa<LuminousModuleOp>(luminousModule) &&
-                            !(isa<ModuleOp>(luminousModule) &&
-                              luminousModule->hasAttr(LuminousDialect::getModuleAttrName()))))
-      return dispatchOp.emitOpError()
-             << "luminous.module '" << luminousModuleName.getValue()
-             << "' is undefined";
+        if (!luminousModule ||
+            (!isa<LuminousModuleOp>(luminousModule) &&
+             !(isa<ModuleOp>(luminousModule) &&
+               luminousModule->hasAttr(LuminousDialect::getModuleAttrName()))))
+          return dispatchOp.emitOpError()
+                 << "luminous.module '" << luminousModuleName.getValue()
+                 << "' is undefined";
 
-    // Check that `dispatch` refers to a well-formed kernel function.
-    Operation *kernelFunc = module.lookupSymbol(dispatchOp.functionAttr());
-    if (!kernelFunc || (!isa<luminous::LuminousFuncOp>(kernelFunc) &&
-        !kernelFunc->hasAttr(LuminousDialect::getFuncAttrName())))
-      return dispatchOp.emitOpError("capsule function '")
-             << dispatchOp.function() << "' is undefined";
+        // Check that `dispatch` refers to a well-formed capsule function.
+        Operation *capsuleFunc = module.lookupSymbol(dispatchOp.functionAttr());
+        if (!capsuleFunc ||
+            (!isa<luminous::LuminousFuncOp>(capsuleFunc) &&
+             !capsuleFunc->hasAttr(LuminousDialect::getFuncAttrName())))
+          return dispatchOp.emitOpError("capsule function '")
+                 << dispatchOp.function() << "' is undefined";
 
-    if (auto kernelFunction = dyn_cast<luminous::LuminousFuncOp>(kernelFunc)) {
-      unsigned actualNumArguments = dispatchOp.getNumFuncOperands();
-      unsigned expectedNumArguments = kernelFunction.getNumArguments();
-      if (expectedNumArguments != actualNumArguments)
-        return dispatchOp.emitOpError("got ")
-               << actualNumArguments << " capsule function operands but expected "
-               << expectedNumArguments;
+        if (auto capsuleFunction =
+                dyn_cast<luminous::LuminousFuncOp>(capsuleFunc)) {
+          const unsigned actualNumArguments = dispatchOp.getNumFuncOperands();
+          const unsigned expectedNumArguments =
+              capsuleFunction.getNumArguments();
+          if (expectedNumArguments != actualNumArguments)
+            return dispatchOp.emitOpError("got ")
+                   << actualNumArguments
+                   << " capsule function operands but expected "
+                   << expectedNumArguments;
 
-      auto functionType = kernelFunction.getFunctionType();
-      for (unsigned i = 0; i < expectedNumArguments; ++i) {
-        if (dispatchOp.getFuncOperand(i).getType() !=
-            functionType.getInput(i)) {
-          return dispatchOp.emitOpError("type of function argument ")
-                 << i << " does not match";
+          const auto functionType = capsuleFunction.getFunctionType();
+          for (unsigned i = 0; i < expectedNumArguments; ++i) {
+            if (dispatchOp.getFuncOperand(i).getType() !=
+                functionType.getInput(i)) {
+              return dispatchOp.emitOpError("type of function argument ")
+                     << i << " does not match";
+            }
+          }
         }
-      }
-    }
-    // TODO: we have to cover else case, dispatch op could refer to func::funcOp
-    // or llvm::funcOp, but it's subject to change that's why I haven't checked
-    // it here
-    return success();
-  });
+        // TODO: we have to cover else case, dispatch op could refer to
+        // func::funcOp or llvm::funcOp, but it's subject to change that's why I
+        // haven't checked it here
+        return success();
+      });
 
   return walkResult.wasInterrupted() ? failure() : success();
 }
@@ -105,7 +112,7 @@ void LuminousModuleOp::build(OpBuilder &builder, OperationState &result,
 ParseResult LuminousModuleOp::parse(OpAsmParser &parser,
                                     OperationState &result) {
   StringAttr nameAttr;
-  if (parser.parseSymbolName(nameAttr, ::SymbolTable::getSymbolAttrName(),
+  if (parser.parseSymbolName(nameAttr, mlir::SymbolTable::getSymbolAttrName(),
                              result.attributes))
     return failure();
 
@@ -115,7 +122,7 @@ ParseResult LuminousModuleOp::parse(OpAsmParser &parser,
 
   // Parse the module body.
   auto *body = result.addRegion();
-  if (parser.parseRegion(*body, None))
+  if (parser.parseRegion(*body, {}))
     return failure();
 
   // Ensure that this module has a valid terminator
@@ -127,9 +134,9 @@ ParseResult LuminousModuleOp::parse(OpAsmParser &parser,
 void LuminousModuleOp::print(OpAsmPrinter &p) {
   p << ' ';
   p.printSymbolName(getName());
-  p.printOptionalAttrDictWithKeyword(getOperation()->getAttrs(),
-                                     {::SymbolTable::getSymbolAttrName()});
-  p.printRegion(getOperation()->getRegion(0), /*printEntryBlockArgs=*/false,
+  p.printOptionalAttrDictWithKeyword((*this)->getAttrs(),
+                                     {mlir::SymbolTable::getSymbolAttrName()});
+  p.printRegion(getRegion(), /*printEntryBlockArgs=*/false,
                 /*printBlockTerminators=*/false);
 }
 
@@ -148,28 +155,28 @@ void LuminousFuncOp::build(OpBuilder &builder, OperationState &result,
 }
 
 ParseResult LuminousFuncOp::parse(OpAsmParser &parser, OperationState &result) {
-  SmallVector<OpAsmParser::Argument> args;
-  SmallVector<DictionaryAttr, 1> resultAttrs;
-  SmallVector<Type, 4> resultTypes;
-  bool isVariadic;
-
   // Parse the function name.
   StringAttr nameAttr;
   if (parser.parseSymbolName(nameAttr, ::mlir::SymbolTable::getSymbolAttrName(),
                              result.attributes))
     return failure();
 
-  auto signatureLocation = parser.getCurrentLocation();
+  SmallVector<OpAsmParser::Argument> entryArgs;
+  SmallVector<DictionaryAttr> resultAttrs;
+  SmallVector<Type> resultTypes;
+  bool isVariadic;
+
   if (failed(function_interface_impl::parseFunctionSignature(
-          parser, /*allowVariadic=*/false, args, isVariadic, resultTypes,
+          parser, /*allowVariadic=*/false, entryArgs, isVariadic, resultTypes,
           resultAttrs)))
     return failure();
 
-  if (args.empty())
+  auto signatureLocation = parser.getCurrentLocation();
+  if (!entryArgs.empty() && entryArgs[0].ssaName.name.empty())
     return parser.emitError(signatureLocation) << "requires named arguments";
 
   // Checking if we have named arguments
-  for (auto &arg: args) {
+  for (auto &arg : entryArgs) {
     if (arg.ssaName.name.empty())
       return parser.emitError(signatureLocation) << "requires named arguments";
   }
@@ -181,7 +188,7 @@ ParseResult LuminousFuncOp::parse(OpAsmParser &parser, OperationState &result) {
   // not to the function type.
   Builder &builder = parser.getBuilder();
   SmallVector<Type> argTypes;
-  for (auto &arg : args)
+  for (auto &arg : entryArgs)
     argTypes.push_back(arg.type);
   auto type = builder.getFunctionType(argTypes, resultTypes);
   result.addAttribute(LuminousFuncOp::getTypeAttrName(), TypeAttr::get(type));
@@ -189,34 +196,34 @@ ParseResult LuminousFuncOp::parse(OpAsmParser &parser, OperationState &result) {
   // Parse attributes.
   if (failed(parser.parseOptionalAttrDictWithKeyword(result.attributes)))
     return failure();
-  function_interface_impl::addArgAndResultAttrs(builder, result, args,
+  function_interface_impl::addArgAndResultAttrs(builder, result, entryArgs,
                                                 resultAttrs);
 
   // Parse the region. If no argument names were provided, take all names
   // (including those of attributions) from the entry block.
   auto *body = result.addRegion();
-  return parser.parseRegion(*body, args);
+  return parser.parseRegion(*body, entryArgs);
 }
 
 void LuminousFuncOp::print(OpAsmPrinter &p) {
   p << ' ';
   p.printSymbolName(getName());
 
-  FunctionType type = getFunctionType();
-  function_interface_impl::printFunctionSignature(
-      p, getOperation(), type.getInputs(),
-      /*isVariadic=*/false, type.getResults());
+  const auto type = getFunctionType();
+  function_interface_impl::printFunctionSignature(p, *this, type.getInputs(),
+                                                  /*isVariadic=*/false,
+                                                  type.getResults());
 
   function_interface_impl::printFunctionAttributes(
-      p, getOperation(), type.getNumInputs(), type.getNumResults(), {});
+      p, *this, type.getNumInputs(), type.getNumResults(), {});
   p.printRegion(getBody(), /*printEntryBlockArgs=*/false);
 }
 
 LogicalResult LuminousFuncOp::verifyType() {
-  Type type = getFunctionTypeAttr().getValue();
+  const auto type = getFunctionTypeAttr().getValue();
   if (!type.isa<FunctionType>())
-    return emitOpError("requires '" + getTypeAttrName() +
-                       "' attribute of function type");
+    return emitOpError() << "requires '" << getTypeAttrName()
+                         << "' attribute of function type";
 
   if (getFunctionType().getNumResults() != 0)
     return emitOpError() << "expected no return type";
@@ -225,8 +232,8 @@ LogicalResult LuminousFuncOp::verifyType() {
 }
 
 LogicalResult LuminousFuncOp::verifyBody() {
-  unsigned numFuncArguments = getNumArguments();
-  unsigned numBlockArguments = front().getNumArguments();
+  const unsigned numFuncArguments = getNumArguments();
+  const unsigned numBlockArguments = front().getNumArguments();
 
   if (numBlockArguments != numFuncArguments)
     return emitOpError() << "expected " << numFuncArguments
@@ -234,7 +241,7 @@ LogicalResult LuminousFuncOp::verifyBody() {
 
   ArrayRef<Type> funcArgTypes = getFunctionType().getInputs();
   for (unsigned i = 0; i < numFuncArguments; ++i) {
-    Type blockArgType = front().getArgument(i).getType();
+    const auto blockArgType = front().getArgument(i).getType();
     if (funcArgTypes[i] != blockArgType)
       return emitOpError() << "expected body region argument #" << i
                            << " to be of type " << funcArgTypes[i] << ", got "
@@ -255,55 +262,54 @@ LogicalResult LuminousFuncOp::verify() {
 
 void DispatchOp::build(OpBuilder &builder, OperationState &result,
                        LuminousFuncOp function, ValueRange asyncDependencies,
-                       ValueRange kernelOperands) {
+                       ValueRange funcOperands) {
   result.addOperands(asyncDependencies);
-  result.addOperands(kernelOperands);
+  result.addOperands(funcOperands);
   result.addTypes({TokenType::get(result.getContext())});
-  auto kernelModule = function->getParentOfType<LuminousModuleOp>();
-  auto kernelSymbol = SymbolRefAttr::get(
-      kernelModule.getNameAttr(), {SymbolRefAttr::get(function.getNameAttr())});
-  result.addAttribute(getFuncAttrName(), kernelSymbol);
-  SmallVector<int32_t, 3> segmentSizes{
+  auto luminousModule = function->getParentOfType<LuminousModuleOp>();
+  const auto capsuleSymbol =
+      SymbolRefAttr::get(luminousModule.getNameAttr(),
+                         {SymbolRefAttr::get(function.getNameAttr())});
+  result.addAttribute(getFuncAttrName(), capsuleSymbol);
+  const SmallVector<int32_t, 2> segmentSizes{
       static_cast<int32_t>(asyncDependencies.size()),
-      static_cast<int32_t>(kernelOperands.size())};
+      static_cast<int32_t>(funcOperands.size())};
   result.addAttribute(getOperandSegmentSizeAttr(),
                       builder.getI32VectorAttr(segmentSizes));
 }
 
-/// The number of operands passed to the kernel function.
-unsigned DispatchOp::getNumFuncOperands() {
-  return getNumOperands() - asyncDependencies().size();
-}
+/// The number of operands passed to the capsule function.
+unsigned DispatchOp::getNumFuncOperands() { return funcOperands().size(); }
 
-/// The name of the kernel's containing module.
+/// The name of the capsule function's containing module.
 StringAttr DispatchOp::getFuncModuleName() {
   return function().getRootReference();
 }
 
-/// The name of the kernel.
+/// The name of the capsule function.
 StringAttr DispatchOp::getFuncName() { return function().getLeafReference(); }
 
-/// The i-th operand passed to the kernel function.
+/// The i-th operand passed to the capsule function.
 Value DispatchOp::getFuncOperand(unsigned i) {
   return getOperand(asyncDependencies().size() + i);
 }
 
 LogicalResult DispatchOp::verify() {
-  auto op = *this;
-  auto module = op->getParentOfType<ModuleOp>();
+  const auto module = (*this)->getParentOfType<ModuleOp>();
   if (!module)
-    return op.emitOpError("expected to belong to a module");
+    return emitOpError("expected to belong to a module");
 
   if (!module->getAttrOfType<UnitAttr>(
           LuminousDialect::getContainerModuleAttrName()))
-    return op.emitOpError(
-        "expected the closest surrounding module to have the '" +
-        LuminousDialect::getContainerModuleAttrName() + "' attribute");
+    return emitOpError("expected the closest surrounding module to have the '" +
+                       LuminousDialect::getContainerModuleAttrName() +
+                       "' attribute");
 
-  auto kernelAttr = op->getAttrOfType<SymbolRefAttr>(op.getFuncAttrName());
-  if (!kernelAttr)
-    return op.emitOpError("symbol reference attribute '" +
-                          op.getFuncAttrName() + "' must be specified");
+  const auto funcAttr =
+      (*this)->getAttrOfType<SymbolRefAttr>(getFuncAttrName());
+  if (!funcAttr)
+    return emitOpError("symbol reference attribute '" + getFuncAttrName() +
+                       "' must be specified");
 
   return success();
 }
@@ -311,7 +317,7 @@ LogicalResult DispatchOp::verify() {
 static ParseResult parseAsyncDependencies(
     OpAsmParser &parser, Type &asyncTokenType,
     SmallVectorImpl<OpAsmParser::UnresolvedOperand> &asyncDependencies) {
-  auto loc = parser.getCurrentLocation();
+  const auto loc = parser.getCurrentLocation();
   if (parser.getNumResults() == 0)
     return parser.emitError(loc, "must have a result");
   asyncTokenType = parser.getBuilder().getType<TokenType>();
@@ -337,7 +343,6 @@ static ParseResult parseDispatchOpOperands(
   if (parser.parseArgumentList(args, OpAsmParser::Delimiter::Paren,
                                /*allowType=*/true))
     return failure();
-
   for (auto &arg : args) {
     argNames.push_back(arg.ssaName);
     argTypes.push_back(arg.type);
@@ -367,10 +372,10 @@ void LaunchOp::build(OpBuilder &builder, OperationState &result,
                      ValueRange shape, ValueRange step) {
   result.addOperands(shape);
   result.addOperands(step);
-  SmallVector<int32_t, 3> segmentSizes{static_cast<int32_t>(shape.size()),
-                                       static_cast<int32_t>(step.size())};
-  result.addAttribute(getOperandSegmentSizeAttr(),
-                      builder.getI32VectorAttr(segmentSizes));
+  result.addAttribute(
+      LaunchOp::getOperandSegmentSizeAttr(),
+      builder.getI32VectorAttr({static_cast<int32_t>(shape.size()),
+                                static_cast<int32_t>(step.size())}));
   result.addRegion();
 }
 
@@ -378,35 +383,35 @@ ParseResult LaunchOp::parse(OpAsmParser &parser, OperationState &result) {
   auto &builder = parser.getBuilder();
 
   // Parsing the operands
-  SmallVector<OpAsmParser::UnresolvedOperand, 4> shape;
-  if (parser.parseKeyword("shape") ||
-      parser.parseOperandList(shape, /*requiredOperandCount=*/-1,
-                              OpAsmParser::Delimiter::Paren) ||
-      parser.resolveOperands(shape, builder.getIndexType(), result.operands))
-    return failure();
+  auto parseKeywordOperands = [&](StringRef keyword)
+      -> FailureOr<SmallVector<OpAsmParser::UnresolvedOperand>> {
+    SmallVector<OpAsmParser::UnresolvedOperand> vector;
+    if (parser.parseKeyword(keyword) ||
+        parser.parseOperandList(vector, /*requiredOperandCount=*/-1,
+                                OpAsmParser::Delimiter::Paren) ||
+        parser.resolveOperands(vector, builder.getIndexType(), result.operands))
+      return failure();
+    return vector;
+  };
 
-  SmallVector<OpAsmParser::UnresolvedOperand, 4> step;
-  if (parser.parseKeyword("step") ||
-      parser.parseOperandList(step, /*requiredOperandCount=*/-1,
-                              OpAsmParser::Delimiter::Paren) ||
-      parser.resolveOperands(step, builder.getIndexType(), result.operands))
+  auto shape = parseKeywordOperands("shape");
+  if (failed(shape))
     return failure();
-
-  if (step.size() != shape.size()) {
-    return parser.emitError(parser.getCurrentLocation(), "op shape and step variables must be the same size.");
-  }
+  auto step = parseKeywordOperands("step");
+  if (failed(step))
+    return failure();
 
   // Now parse the body.
-  std::unique_ptr<Region> region = std::make_unique<Region>();
-  if (parser.parseRegion(*region))
+  auto region = std::make_unique<Region>();
+  if (parser.parseRegion(*region, {}))
     return failure();
   result.addRegion(std::move(region));
 
   // Set `operand_segment_sizes` attribute.
   result.addAttribute(
       LaunchOp::getOperandSegmentSizeAttr(),
-      builder.getI32VectorAttr({static_cast<int32_t>(shape.size()),
-                                static_cast<int32_t>(step.size())}));
+      builder.getI32VectorAttr({static_cast<int32_t>(shape.getValue().size()),
+                                static_cast<int32_t>(step.getValue().size())}));
 
   // Parse attributes.
   if (parser.parseOptionalAttrDict(result.attributes))
@@ -423,5 +428,12 @@ void LaunchOp::print(OpAsmPrinter &p) {
       getOperation()->getAttrs(),
       /*elidedAttrs=*/LaunchOp::getOperandSegmentSizeAttr());
 }
+
+LogicalResult LaunchOp::verify() {
+  if (shape().size() != step().size())
+    return emitOpError("shape and step variables must be the same size.");
+  return success();
+}
+
 #define GET_OP_CLASSES
 #include "mlir/Dialect/Luminous/IR/LuminousOps.cpp.inc"
