@@ -38,7 +38,7 @@ struct LuminousLaunchLinalgRewrite
     // launch capsule
     if (!linalgOp->hasAttr(LuminousDialect::getMemoryFootprintAttrName()) ||
         isa<LaunchOp>(linalgOp->getParentOp()) ||
-        linalgOp->getParentOp()->hasAttr(LuminousDialect::getLaunchAttrName()))
+        linalgOp->getParentOp()->hasAttr(LuminousDialect::getMemoryFootprintAttrName()))
       return failure();
 
     OpBuilder::InsertionGuard guard(rewriter);

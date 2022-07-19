@@ -290,12 +290,17 @@ void defaultDispatchBuilderFn(Operation *launchOp,
       if (op.hasAttr(LuminousDialect::getMemoryFootprintAttrName())) {
         // making sure parent op hasn't already been dispatched, nested
         // dispatches are not allowed
-        Operation *p = op.getParentOp();
-        while (!isa<LaunchOp>(p) && !p->hasAttr(LuminousDialect::getLaunchAttrName())) {
-          assert(!p->hasAttr(LuminousDialect::getMemoryFootprintAttrName()) &&
-                 "attempting a nested dispatch!");
-          p = p->getParentOp();
-        }
+        auto isNestedDispatch = [](Operation &op){
+          Operation *p = op.getParentOp();
+          while (!isa<LaunchOp>(p) && !p->hasAttr(LuminousDialect::getLaunchAttrName())) {
+            if (p->hasAttr(LuminousDialect::getMemoryFootprintAttrName()))
+              return true;
+            p = p->getParentOp();
+          }
+          return false;
+        };
+        (void) isNestedDispatch;
+        assert(!isNestedDispatch(op) && "attempting a nested dispatch!");
         auto block = dispatchBlocks.addNewBlock(dependencies);
         dependencies.clear();
         block.pushBack(&op);

@@ -18,6 +18,7 @@
 // CHECK-NEXT: gpu
 // CHECK-NEXT: linalg
 // CHECK-NEXT: llvm
+// CHECK-NEXT: luminous
 // CHECK-NEXT: math
 // CHECK-NEXT: memref
 // CHECK-NEXT: ml_program

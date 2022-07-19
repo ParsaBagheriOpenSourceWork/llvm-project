@@ -7,7 +7,7 @@ module  {
     %c0 = arith.constant 0 : index
     scf.parallel (%arg0) = (%c0) to (%c64) step (%c1) {
       scf.yield
-    } {"luminous-launch"}
+    } {"luminous.launch"}
     return
   }
 }
