@@ -1,5 +1,28 @@
 // RUN: mlir-opt -split-input-file -verify-diagnostics %s
 
+// expected-error @+1 {{expected 'luminous.container_module' attribute to be attached to 'builtin.module'}}
+func.func @wrong () attributes {luminous.container_module}  {
+  luminous.module @capsules {
+  }
+  return
+}
+
+// -----
+
+module attributes {luminous.container_module} {
+  luminous.module @capsules {
+    // expected-error @+1 {{custom op 'luminous.func' requires named arguments}}
+    luminous.func @capsule (f32) {
+      luminous.return
+    }
+  }
+  func.func @m() {
+    luminous.dispatch @non-existent::@non-existent()
+  }
+}
+
+// -----
+
 module attributes {luminous.container_module} {
   luminous.module @capsules {
     // expected-error @+1 {{custom op 'luminous.func' requires named arguments}}
@@ -64,6 +87,19 @@ module attributes {luminous.container_module} {
     ^bb0(%arg0: f32, %arg1: i32):
       "luminous.return"() : () -> ()
     } ) {sym_name = "capsule", function_type = (f32, f32) -> ()} : () -> ()
+  }
+}
+
+// -----
+
+module attributes {luminous.container_module}  {
+  luminous.module @capsules {
+    llvm.mlir.global internal constant @capsule("capsule\00")
+  }
+
+  func.func @m() {
+    // expected-error @+1 {{'luminous.dispatch' op symbol reference attribute 'function' must be specified}}
+    %0 = "luminous.dispatch"() {operand_segment_sizes = dense<0> : vector<2xi32>} : () -> !async.token
   }
 }
 

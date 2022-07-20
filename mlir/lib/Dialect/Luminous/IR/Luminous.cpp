@@ -36,7 +36,6 @@ void LuminousDialect::initialize() {
 
 LogicalResult LuminousDialect::verifyOperationAttribute(Operation *op,
                                                         NamedAttribute attr) {
-
   if (!attr.getValue().isa<UnitAttr>() ||
       attr.getName() != getContainerModuleAttrName())
     return success();
@@ -47,53 +46,59 @@ LogicalResult LuminousDialect::verifyOperationAttribute(Operation *op,
            << getContainerModuleAttrName() << "' attribute to be attached to '"
            << ModuleOp::getOperationName() << '\'';
 
-  const auto walkResult =
-      module.walk([&module](DispatchOp dispatchOp) -> WalkResult {
-        // Check that `dispatch` refers to a well-formed luminous module.
-        const StringAttr luminousModuleName = dispatchOp.getFuncModuleName();
-        const auto luminousModule = module.lookupSymbol(luminousModuleName);
+  const auto walkResult = module.walk([&module](
+                                          DispatchOp dispatchOp) -> WalkResult {
+    // Check that `dispatch` refers to a well-formed capsule function.
+    const auto funcAttr =
+        dispatchOp->getAttrOfType<SymbolRefAttr>(dispatchOp.getFuncAttrName());
+    if (!funcAttr)
+      return dispatchOp.emitOpError("symbol reference attribute '" +
+                                    dispatchOp.getFuncAttrName() +
+                                    "' must be specified");
 
-        if (!luminousModule ||
-            (!isa<LuminousModuleOp>(luminousModule) &&
-             !(isa<ModuleOp>(luminousModule) &&
-               luminousModule->hasAttr(LuminousDialect::getModuleAttrName()))))
-          return dispatchOp.emitOpError()
-                 << "luminous.module '" << luminousModuleName.getValue()
-                 << "' is undefined";
+    // Check that `dispatch` refers to a well-formed luminous module.
+    const StringAttr luminousModuleName = dispatchOp.getFuncModuleName();
+    auto *luminousModule = module.lookupSymbol(luminousModuleName);
 
-        // Check that `dispatch` refers to a well-formed capsule function.
-        Operation *capsuleFunc = module.lookupSymbol(dispatchOp.functionAttr());
-        if (!capsuleFunc ||
-            (!isa<luminous::LuminousFuncOp>(capsuleFunc) &&
-             !capsuleFunc->hasAttr(LuminousDialect::getFuncAttrName())))
-          return dispatchOp.emitOpError("capsule function '")
-                 << dispatchOp.function() << "' is undefined";
+    if (!luminousModule ||
+        (!isa<LuminousModuleOp>(luminousModule) &&
+         !(isa<ModuleOp>(luminousModule) &&
+           luminousModule->hasAttr(LuminousDialect::getModuleAttrName()))))
+      return dispatchOp.emitOpError()
+             << "luminous.module '" << luminousModuleName.getValue()
+             << "' is undefined";
 
-        if (auto capsuleFunction =
-                dyn_cast<luminous::LuminousFuncOp>(capsuleFunc)) {
-          const unsigned actualNumArguments = dispatchOp.getNumFuncOperands();
-          const unsigned expectedNumArguments =
-              capsuleFunction.getNumArguments();
-          if (expectedNumArguments != actualNumArguments)
-            return dispatchOp.emitOpError("got ")
-                   << actualNumArguments
-                   << " capsule function operands but expected "
-                   << expectedNumArguments;
+    Operation *capsuleFunc = module.lookupSymbol(funcAttr);
+    if (!capsuleFunc ||
+        (!isa<luminous::LuminousFuncOp>(capsuleFunc) &&
+         !capsuleFunc->hasAttr(LuminousDialect::getFuncAttrName())))
+      return dispatchOp.emitOpError("capsule function '")
+             << dispatchOp.function() << "' is undefined";
 
-          const auto functionType = capsuleFunction.getFunctionType();
-          for (unsigned i = 0; i < expectedNumArguments; ++i) {
-            if (dispatchOp.getFuncOperand(i).getType() !=
-                functionType.getInput(i)) {
-              return dispatchOp.emitOpError("type of function argument ")
-                     << i << " does not match";
-            }
-          }
+    if (auto capsuleFunction =
+            dyn_cast<luminous::LuminousFuncOp>(capsuleFunc)) {
+      const unsigned actualNumArguments = dispatchOp.getNumFuncOperands();
+      const unsigned expectedNumArguments = capsuleFunction.getNumArguments();
+      if (expectedNumArguments != actualNumArguments)
+        return dispatchOp.emitOpError("got ")
+               << actualNumArguments
+               << " capsule function operands but expected "
+               << expectedNumArguments;
+
+      const auto functionType = capsuleFunction.getFunctionType();
+      for (unsigned i = 0; i < expectedNumArguments; ++i) {
+        if (dispatchOp.getFuncOperand(i).getType() !=
+            functionType.getInput(i)) {
+          return dispatchOp.emitOpError("type of function argument ")
+                 << i << " does not match";
         }
-        // TODO: we have to cover else case, dispatch op could refer to
-        // func::funcOp or llvm::funcOp, but it's subject to change that's why I
-        // haven't checked it here
-        return success();
-      });
+      }
+    }
+    // TODO: we have to cover else case, dispatch op could refer to
+    // func::funcOp or llvm::funcOp, but it's subject to change that's why I
+    // haven't checked it here
+    return success();
+  });
 
   return walkResult.wasInterrupted() ? failure() : success();
 }
@@ -304,12 +309,6 @@ LogicalResult DispatchOp::verify() {
     return emitOpError("expected the closest surrounding module to have the '" +
                        LuminousDialect::getContainerModuleAttrName() +
                        "' attribute");
-
-  const auto funcAttr =
-      (*this)->getAttrOfType<SymbolRefAttr>(getFuncAttrName());
-  if (!funcAttr)
-    return emitOpError("symbol reference attribute '" + getFuncAttrName() +
-                       "' must be specified");
 
   return success();
 }

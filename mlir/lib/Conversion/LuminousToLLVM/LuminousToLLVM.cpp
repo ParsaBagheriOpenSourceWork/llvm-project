@@ -53,6 +53,7 @@ createArgStruct(PatternRewriter &rewriter, OperandRange operands, ValueRange val
       actuals.push_back(operand);
     }
   }
+
   return LLVM::LLVMStructType::getLiteral(rewriter.getContext(), paramTypes,
                                           /* packed */ true);
 }
