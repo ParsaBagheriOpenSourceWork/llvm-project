@@ -177,8 +177,6 @@ ParseResult LuminousFuncOp::parse(OpAsmParser &parser, OperationState &result) {
     return failure();
 
   auto signatureLocation = parser.getCurrentLocation();
-  if (!entryArgs.empty() && entryArgs[0].ssaName.name.empty())
-    return parser.emitError(signatureLocation) << "requires named arguments";
 
   // Checking if we have named arguments
   for (auto &arg : entryArgs) {
