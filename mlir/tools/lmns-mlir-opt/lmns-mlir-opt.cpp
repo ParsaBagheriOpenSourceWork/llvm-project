@@ -41,6 +41,9 @@ struct RemoveLuminousModule : public OpRewritePattern<ModuleOp> {
   using OpRewritePattern<ModuleOp>::OpRewritePattern;
   LogicalResult matchAndRewrite(ModuleOp op,
                                 PatternRewriter &rewriter) const override {
+    if(!op->hasAttr("luminous.module"))
+      return failure();
+
     rewriter.eraseOp(op);
     return success();
   }
