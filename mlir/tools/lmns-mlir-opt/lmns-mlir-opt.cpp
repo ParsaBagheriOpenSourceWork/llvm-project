@@ -6,7 +6,13 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// Main entry function for mlir-opt for when built as standalone binary.
+// This is a wrapper around mlir-opt. It is used to extract luminous module
+// nested inside a module. It will dump out the host code to stderr and the
+// device code to stdout. The command line options will be forwarded to mlir-opt
+// along with the device code.
+//
+// TODO: This will be removed in the future and incorporated as a pass in mlir-opt
+// something like --luminous-extract-module="outfile=<file>"
 //
 //===----------------------------------------------------------------------===//
 
@@ -31,23 +37,10 @@
 using namespace llvm;
 using namespace mlir;
 
-struct ReplaceFuncWithDecl : public OpRewritePattern<ModuleOp> {
+struct RemoveLuminousModule : public OpRewritePattern<ModuleOp> {
   using OpRewritePattern<ModuleOp>::OpRewritePattern;
   LogicalResult matchAndRewrite(ModuleOp op,
                                 PatternRewriter &rewriter) const override {
-
-    //    auto parentModule = op->getParentOfType<ModuleOp>();
-    //    OpBuilder::InsertionGuard g(rewriter);
-    //    rewriter.setInsertionPoint(op);
-    //    for (auto &bodyOp : *op.getBody()) {
-    //      if (auto fnOp = dyn_cast<LLVM::LLVMFuncOp>(bodyOp)) {
-    //        auto funcOp = rewriter.create<LLVM::LLVMFuncOp>(
-    //            fnOp->getLoc(), fnOp.getName(), fnOp.getFunctionType());
-    //        funcOp->setAttr("llvm.emit_c_interface",
-    //                        UnitAttr::get(op->getContext()));
-    //        funcOp.setPrivate();
-    //      }
-    //    }
     rewriter.eraseOp(op);
     return success();
   }
@@ -58,7 +51,7 @@ struct ModuleExtractor
   void runOnOperation() override {
     auto module = getOperation();
     RewritePatternSet patterns(&getContext());
-    patterns.add<ReplaceFuncWithDecl>(&getContext());
+    patterns.add<RemoveLuminousModule>(&getContext());
     (void)applyPatternsAndFoldGreedily(module, std::move(patterns));
   }
 };
@@ -165,8 +158,8 @@ static LogicalResult lmnsMlirOptMain(int argc, char **argv,
     return failure();
   }
 
-  // the inner module is now taken out of the moduleOp and is written to tempFile
-  // dump moduleOp it to stderr for now TODO set up cl arg
+  // the inner module is now taken out of the moduleOp and is written to
+  // tempFile dump moduleOp it to stderr for now TODO set up cl arg
   llvm::errs() << moduleOp;
 
   // run mlir opt on the inner module now

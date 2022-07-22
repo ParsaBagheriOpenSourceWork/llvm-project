@@ -5,7 +5,22 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
-
+//
+// This file implements the luminous-to-llvm pass.
+// TODO: this is the current implementation, might change in the future
+// Prerequisites:
+//    1) luminous-to-std has to have run
+//    2) Luminous capsules must have been lowered to llvm
+//
+// Objectives:
+//    1) Inserts a runtime load call to load the capsule that is being
+//    dispatched.
+//    2) Packs arguments of a luminous.dispatch op into a packed struct.
+//    3) Inserts an llvm.call to the runtime dispatch function, and its
+//    arguments will be the loaded capsule, pointer to the argument struct, and
+//    the size of the struct in bits.
+//    4) Creates a wrapper function for each capsule, in the luminous module, to
+//    unpack the packed arguments and pass them to the actual capsule.
 
 #include "mlir/Conversion/LuminousToLLVM/LuminousToLLVM.h"
 #include "../PassDetail.h"
@@ -31,9 +46,10 @@ constexpr char LuminousRuntimeDispatchFn[] = "__luminous_runtime_dispatch";
 constexpr char LuminousRuntimeLoadFn[] = "__luminous_runtime_load_capsule";
 
 static LLVM::LLVMStructType
-createArgStruct(PatternRewriter &rewriter, OperandRange operands, ValueRange values,
-                std::vector<Type> &paramTypes, std::vector<Value> &actuals,
-                TypeConverter *typeConverter, StringRef name) {
+createArgStruct(PatternRewriter &rewriter, OperandRange operands,
+                ValueRange values, SmallVector<Type> &paramTypes,
+                SmallVector<Value> &actuals, TypeConverter *typeConverter,
+                StringRef name) {
   for (auto operand_tuple : llvm::zip(operands, values)) {
     auto operand = std::get<0>(operand_tuple);
     if (operand.getType().isa<MemRefType>()) {
@@ -96,15 +112,15 @@ static void createWrapperFn(PatternRewriter &rewriter, DispatchOp op,
   {
     OpBuilder::InsertionGuard innerGuard(rewriter);
     rewriter.setInsertionPointToEnd(body);
-    auto zero = rewriter.create<LLVM::ConstantOp>(loc, llvmInt32Type,
-                                                  rewriter.getI32IntegerAttr(0));
+    auto zero = rewriter.create<LLVM::ConstantOp>(
+        loc, llvmInt32Type, rewriter.getI32IntegerAttr(0));
     // Casting void ptr to a pointer to our struct type
     auto argBitCast = rewriter.create<LLVM::BitcastOp>(
         loc, LLVM::LLVMPointerType::get(paramStruct),
         ValueRange(body->getArgument(0)));
 
     // Unpacking arguments
-    std::vector<Value> args;
+    SmallVector<Value> args;
     for (auto &tuple : llvm::enumerate(paramStruct.getBody())) {
       auto t = tuple.value();
       int i = tuple.index();
@@ -131,6 +147,7 @@ LogicalResult LuminousDispatchToLLVM::matchAndRewrite(
   OpBuilder::InsertionGuard g(rewriter);
   auto loc = op.getLoc();
   auto module = op->getParentOfType<ModuleOp>();
+  assert(module && "must have a valid module op ancestor");
 
   // Types that we need
   auto llvmInt32Type = IntegerType::get(rewriter.getContext(), 32);
@@ -143,11 +160,11 @@ LogicalResult LuminousDispatchToLLVM::matchAndRewrite(
                                                rewriter.getI32IntegerAttr(1));
 
   // creating the arguments struct type
-  std::vector<Type> paramTypes;
-  std::vector<Value> actuals;
+  SmallVector<Type> paramTypes;
+  SmallVector<Value> actuals;
   auto paramStruct = createArgStruct(
-      rewriter, op.getOperands(), adaptor.getOperands(), paramTypes,
-      actuals, typeConverter, op.getFuncName().getValue());
+      rewriter, op.getOperands(), adaptor.getOperands(), paramTypes, actuals,
+      typeConverter, op.getFuncName().getValue());
 
   // instantiating and packing values into an arguments struct
   auto packArgsStruct = [&]() {
@@ -215,7 +232,8 @@ LogicalResult LuminousDispatchToLLVM::matchAndRewrite(
   // This deletes the async await op. Later we will need to come up with our own
   // async handling runtime
   for (auto user : op->getUsers()) {
-    rewriter.eraseOp(user);
+    if (isa<async::AwaitOp>(user))
+      rewriter.eraseOp(user);
   }
   ///--------------------------------------
 

@@ -5,7 +5,12 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
-
+//
+// This file implements the luminous-to-std pass.
+// The objective of ths pass is to convert luminous.module to module, and
+// luminous.func to func.func.
+//
+//===----------------------------------------------------------------------===//
 
 #include "mlir/Conversion/LuminousToStandard/LuminousToStandard.h"
 #include "../PassDetail.h"
