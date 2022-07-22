@@ -33,6 +33,8 @@
 #include "mlir/Conversion/LinalgToSPIRV/LinalgToSPIRVPass.h"
 #include "mlir/Conversion/LinalgToStandard/LinalgToStandard.h"
 #include "mlir/Conversion/LinalgToLuminous/LinalgToLuminous.h"
+#include "mlir/Conversion/LuminousToStandard/LuminousToStandard.h"
+#include "mlir/Conversion/LuminousToLLVM/LuminousToLLVM.h"
 #include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
 #include "mlir/Conversion/MathToLibm/MathToLibm.h"
 #include "mlir/Conversion/MathToSPIRV/MathToSPIRVPass.h"

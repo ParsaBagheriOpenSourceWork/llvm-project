@@ -34,11 +34,21 @@ struct LuminousLaunchLinalgRewrite
   LogicalResult matchAndRewrite(LinalgOp linalgOp,
                                 PatternRewriter &rewriter) const override {
 
-    // Only perform this conversion on attributed linalg ops that are not in a
-    // launch capsule
-    if (!linalgOp->hasAttr(luminous::maxMemoryAttrName) ||
-        isa<LaunchOp>(linalgOp->getParentOp()) ||
-        linalgOp->getParentOp()->hasAttr(luminous::launchAttrName))
+    // Only perform this conversion on attributed linalg ops that are not inside
+    // a launch block
+    auto hasLaunchOpParent = [&](Operation *op) {
+      if (op->getParentOfType<LaunchOp>())
+        return true;
+      // Check if we have a parent with launch attribute
+      auto p = op->getParentOfType<scf::ParallelOp>();
+      while (p) {
+        if (p->hasAttr(LuminousDialect::getLaunchAttrName()))
+          break;
+        p = p->getParentOfType<scf::ParallelOp>();
+      }
+      return p != nullptr;
+    };
+    if (hasLaunchOpParent(linalgOp))
       return failure();
 
     OpBuilder::InsertionGuard guard(rewriter);
@@ -79,9 +89,9 @@ static LogicalResult applyPatterns(ModuleOp module) {
 #define GET_OP_LIST
 #include "mlir/Dialect/Linalg/IR/LinalgStructuredOps.cpp.inc"
       >([&](Operation *op) {
-    return !op->hasAttr(luminous::maxMemoryAttrName) ||
+    return !op->hasAttr(LuminousDialect::getMemoryFootprintAttrName()) ||
            isa<LaunchOp>(op->getParentOp()) ||
-           op->getParentOp()->hasAttr(luminous::launchAttrName);
+           op->getParentOp()->hasAttr(LuminousDialect::getLaunchAttrName());
   });
   target.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
   RewritePatternSet patterns(module.getContext());

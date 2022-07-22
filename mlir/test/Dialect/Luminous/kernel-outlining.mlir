@@ -22,7 +22,7 @@ module {
     ^bb0(%arg3: index):
       // CHECK: %[[DISP:.*]] = luminous.dispatch  @[[CAPSULE:.*]]::@[[ASYNC_FN_0:.*]] (%[[ARG0:.*]], %[[ARG1:.*]], %[[ARG2:.*]])
       // CHECK: async.await %[[DISP]] : !async.token
-      linalg.generic {indexing_maps = [#map, #map, #map], iterator_types = ["parallel"]} ins(%arg0, %arg1 : memref<1024xf32>, memref<1024xf32>) outs(%arg2 : memref<1024xf32>) attrs =  {"linalg-max-memory-footprint" = 12294 : i64} {
+      linalg.generic {indexing_maps = [#map, #map, #map], iterator_types = ["parallel"]} ins(%arg0, %arg1 : memref<1024xf32>, memref<1024xf32>) outs(%arg2 : memref<1024xf32>) attrs =  {"luminous.memory-footprint" = 12294 : i64} {
       ^bb0(%arg4: f32, %arg5: f32, %arg6: f32):
         %0 = arith.addf %arg4, %arg5 : f32
         linalg.yield %0 : f32
@@ -44,9 +44,9 @@ module {
     %c0 = arith.constant 0 : index
     luminous.launch shape (%c1024) step (%c1024){
     ^bb0(%arg4: index):
-      linalg.matvec {"linalg-max-memory-footprint" = 10000 : i64} ins(%arg0, %arg1 : memref<1024x1024xf32>, memref<1024xf32>) outs(%arg2 : memref<1024xf32>)
-      linalg.matvec {"linalg-max-memory-footprint" = 10000 : i64} ins(%arg0, %arg2 : memref<1024x1024xf32>, memref<1024xf32>) outs(%arg1 : memref<1024xf32>)
-      linalg.dot {"linalg-max-memory-footprint" = 10000 : i64} ins(%arg1, %arg2 : memref<1024xf32>, memref<1024xf32>) outs(%arg3 : memref<f32>)
+      linalg.matvec {"luminous.memory-footprint" = 10000 : i64} ins(%arg0, %arg1 : memref<1024x1024xf32>, memref<1024xf32>) outs(%arg2 : memref<1024xf32>)
+      linalg.matvec {"luminous.memory-footprint" = 10000 : i64} ins(%arg0, %arg2 : memref<1024x1024xf32>, memref<1024xf32>) outs(%arg1 : memref<1024xf32>)
+      linalg.dot {"luminous.memory-footprint" = 10000 : i64} ins(%arg1, %arg2 : memref<1024xf32>, memref<1024xf32>) outs(%arg3 : memref<f32>)
       luminous.yield
     }
     return
@@ -78,7 +78,7 @@ module {
     luminous.launch shape (%c1024) step (%c1024){
     ^bb0(%arg4: index):
       scf.for %arg5 = %c0 to %c1024 step %c1024 {
-        linalg.matvec {"linalg-max-memory-footprint" = 10000 : i64} ins(%arg0, %arg1 : memref<1024x1024xf32>, memref<1024xf32>) outs(%arg2 : memref<1024xf32>)
+        linalg.matvec {"luminous.memory-footprint" = 10000 : i64} ins(%arg0, %arg1 : memref<1024x1024xf32>, memref<1024xf32>) outs(%arg2 : memref<1024xf32>)
       }
       luminous.yield
     }
@@ -88,7 +88,7 @@ module {
 
 // CHECK: luminous.module @[[CAPSULE:.*]]
 // CHECK-NEXT: luminous.func @[[ASYNC_FN_0:.*]](%[[KERNEL_ARG0:.*]]: memref<1024x1024xf32>, %[[KERNEL_ARG1:.*]]: memref<1024xf32>, %[[KERNEL_ARG2:.*]]: memref<1024xf32>)
-// CHECK-NEXT: linalg.matvec {"linalg-max-memory-footprint" = 10000 : i64} ins(%[[KERNEL_ARG0]], %[[KERNEL_ARG1]] : memref<1024x1024xf32>, memref<1024xf32>) outs(%[[KERNEL_ARG2]] : memref<1024xf32>)
+// CHECK-NEXT: linalg.matvec {"luminous.memory-footprint" = 10000 : i64} ins(%[[KERNEL_ARG0]], %[[KERNEL_ARG1]] : memref<1024x1024xf32>, memref<1024xf32>) outs(%[[KERNEL_ARG2]] : memref<1024xf32>)
 // CHECK-LABEL: func.func @test3
 // CHECK: (%[[ARG0:.*]], %[[ARG1:.*]], %[[ARG2:.*]])
     // CHECK: %[[C1024:.*]] = arith.constant 1024 : index
@@ -112,7 +112,7 @@ module {
     ^bb0(%arg4: index):
       scf.for %arg5 = %c0 to %c1024 step %c1024 {
         scf.for %arg6 = %c0 to %c1024 step %c1024 {
-            linalg.matvec {"linalg-max-memory-footprint" = 10000 : i64} ins(%arg0, %arg1 : memref<1024x1024xf32>, memref<1024xf32>) outs(%arg2 : memref<1024xf32>)
+            linalg.matvec {"luminous.memory-footprint" = 10000 : i64} ins(%arg0, %arg1 : memref<1024x1024xf32>, memref<1024xf32>) outs(%arg2 : memref<1024xf32>)
         }
       }
       luminous.yield
@@ -123,7 +123,7 @@ module {
 
 // CHECK: luminous.module @[[CAPSULE:.*]]
 // CHECK-NEXT: luminous.func @[[ASYNC_FN_0:.*]](%[[KERNEL_ARG0:.*]]: memref<1024x1024xf32>, %[[KERNEL_ARG1:.*]]: memref<1024xf32>, %[[KERNEL_ARG2:.*]]: memref<1024xf32>)
-// CHECK-NEXT: linalg.matvec {"linalg-max-memory-footprint" = 10000 : i64} ins(%[[KERNEL_ARG0]], %[[KERNEL_ARG1]] : memref<1024x1024xf32>, memref<1024xf32>) outs(%[[KERNEL_ARG2]] : memref<1024xf32>)
+// CHECK-NEXT: linalg.matvec {"luminous.memory-footprint" = 10000 : i64} ins(%[[KERNEL_ARG0]], %[[KERNEL_ARG1]] : memref<1024x1024xf32>, memref<1024xf32>) outs(%[[KERNEL_ARG2]] : memref<1024xf32>)
 // CHECK-LABEL: func.func @test3
 // CHECK: (%[[ARG0:.*]], %[[ARG1:.*]], %[[ARG2:.*]])
     // CHECK: %[[C1024:.*]] = arith.constant 1024 : index

@@ -166,7 +166,7 @@ def Luminous_ReturnOp : Luminous_Op<"return", [HasParent<"LuminousFuncOp">,
 def Luminous_DispatchOp : Luminous_Op<"dispatch", [AttrSizedOperandSegments]>,
                           Arguments<(ins Variadic<Async_TokenType>:$asyncDependencies,
                                        SymbolRefAttr:$function,
-                                       Variadic<AnyType>:$operands)>,
+                                       Variadic<AnyType>:$funcOperands)>,
                           Results<(outs Async_TokenType:$asyncToken)> {
   let summary = "Launches a Luminous async function";
 
@@ -226,7 +226,7 @@ def Luminous_DispatchOp : Luminous_Op<"dispatch", [AttrSizedOperandSegments]>,
   let assemblyFormat = [{
     custom<AsyncDependencies>(type($asyncToken), $asyncDependencies)
     $function
-    custom<DispatchOpOperands>($operands, type($operands))
+    custom<DispatchOpOperands>($funcOperands, type($funcOperands))
     attr-dict}];
 }
 
@@ -253,6 +253,7 @@ def Luminous_LaunchOp : Luminous_Op<"launch", [AttrSizedOperandSegments]>,
   let regions = (region AnyRegion:$body);
   let skipDefaultBuilders = 1;
   let hasCustomAssemblyFormat = 1;
+  let hasVerifier = 1;
   let builders = [OpBuilder<(ins "ValueRange": $shape,
                                  "ValueRange": $step)>];
 }
